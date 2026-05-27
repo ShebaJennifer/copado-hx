@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "copado-hx"
+version = "0.1.0"
+description = "Headless CLI for Copado DevOps — manage your entire Salesforce release lifecycle from the terminal."
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+authors = [
+    {name = "Copado Headless Team"},
+]
+keywords = ["copado", "salesforce", "devops", "cli", "headless"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Topic :: Software Development :: Build Tools",
+]
+dependencies = [
+    "typer[all]>=0.12.0",
+    "httpx>=0.27.0",
+    "rich>=13.7.0",
+    "keyring>=25.0.0",
+    "pydantic>=2.6.0",
+    "python-dotenv>=1.0.0",
+]
+
+[project.scripts]
+copado-hx = "copado_hx.main:app_entry"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "ruff>=0.3.0",
+]
+
+[tool.setuptools.packages.find]
+include = ["copado_hx*"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"

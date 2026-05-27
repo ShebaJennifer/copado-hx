@@ -1,0 +1,11 @@
+{
+    "default_pipeline": "",
+    "default_environment": "",
+    "copado_cicd_base_url": "https://your-copado-instance.copado.com/api",
+    "copado_crt_base_url": "https://your-crt-instance.copado.com",
+    "copado_ai_base_url": "https://copadogpt-api.robotic.copado.com",
+    "crt_project_id": "",
+    "ai_org_id": "",
+    "ai_workspace_id": "",
+    "mock_mode": true
+}
