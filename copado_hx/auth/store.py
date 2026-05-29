@@ -20,9 +20,12 @@ import keyring
 
 SERVICE_PREFIX = "copado-hx"
 
-# The three token types we manage
+# Token types we manage
 TOKEN_TYPES = {
-    "cicd": "Copado CI/CD API Token",
+    "cicd": "Copado CI/CD API Token (legacy)",
+    "sf_access_token": "Salesforce OAuth Access Token",
+    "sf_password": "Salesforce Password + Security Token",
+    "copado_actions_key": "Copado Actions API Key (webhook)",
     "crt": "CRT Personal Access Key (PAK)",
     "ai": "Copado AI Platform API Key",
 }

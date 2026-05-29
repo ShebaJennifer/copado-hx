@@ -46,26 +46,73 @@ def login(
 
         # --- Salesforce / CI/CD ---
         print_info("[bold]\n── Copado CI/CD (Salesforce) ──[/bold]")
+        print_info("  Reads use SF OAuth → SOQL.  Actions use mcwebhook + Copado Actions key.")
+
         sf_url = Prompt.ask(
-            "  Salesforce org URL (e.g. https://myorg.my.salesforce.com)",
-            default=settings.copado_sf_instance_url or "",
+            "  Salesforce instance URL (e.g. https://myorg.my.salesforce.com)",
+            default=settings.sf_instance_url or settings.copado_sf_instance_url or "",
         )
         if sf_url.strip():
-            # Normalize: strip trailing slashes and /one/one.app etc.
             sf_url = sf_url.strip().split("/one/")[0].split("/lightning/")[0].rstrip("/")
-            # Convert lightning URL to .my.salesforce.com
             if ".lightning.force.com" in sf_url:
                 subdomain = sf_url.replace("https://", "").replace("http://", "").split(".")[0]
                 sf_url = f"https://{subdomain}.my.salesforce.com"
-            update_settings(copado_sf_instance_url=sf_url)
+            update_settings(sf_instance_url=sf_url, copado_sf_instance_url=sf_url)
             print_success(f"Salesforce URL: {sf_url}")
 
-        cicd_val = Prompt.ask("  CI/CD API Token (Session ID or API key)", default="", password=True)
-        if cicd_val.strip():
-            store_token("cicd", cicd_val.strip())
-            print_success("CI/CD token: stored")
+        sf_client_id = Prompt.ask(
+            "  Connected App Client ID (consumer key)",
+            default=settings.sf_client_id or "",
+        )
+        if sf_client_id.strip():
+            update_settings(sf_client_id=sf_client_id.strip())
+
+        sf_client_secret = Prompt.ask(
+            "  Connected App Client Secret", default="", password=True
+        )
+        if sf_client_secret.strip():
+            update_settings(sf_client_secret=sf_client_secret.strip())
+
+        sf_user = Prompt.ask(
+            "  Salesforce username",
+            default=settings.sf_username or "",
+        )
+        if sf_user.strip():
+            update_settings(sf_username=sf_user.strip())
+
+        sf_pass = Prompt.ask("  Salesforce password + security token", default="", password=True)
+        if sf_pass.strip():
+            store_token("sf_password", sf_pass.strip())
+            print_success("SF password: stored")
         else:
-            print_info("CI/CD token: skipped")
+            print_info("SF password: skipped")
+
+        # Direct access token (alternative to OAuth flow)
+        sf_token = Prompt.ask(
+            "  OR paste SF Access Token directly (Session ID)", default="", password=True
+        )
+        if sf_token.strip():
+            store_token("sf_access_token", sf_token.strip())
+            print_success("SF access token: stored")
+
+        # Copado Actions API Key (for mcwebhook calls)
+        print_info("[bold]\n  ── Copado Actions API Key (for commit/promote/deploy) ──[/bold]")
+        actions_key = Prompt.ask(
+            "  Copado Actions API Key (from Copado Actions API tab)", default="", password=True
+        )
+        if actions_key.strip():
+            store_token("copado_actions_key", actions_key.strip())
+            print_success("Copado Actions key: stored")
+        else:
+            print_info("Copado Actions key: skipped")
+
+        # Pipeline ID for source format validation
+        pipeline_id = Prompt.ask(
+            "  Pipeline ID (18-char SF Id, optional)",
+            default=settings.copado_actions_pipeline_id or "",
+        )
+        if pipeline_id.strip():
+            update_settings(copado_actions_pipeline_id=pipeline_id.strip())
 
         # --- CRT ---
         print_info("[bold]\n── Copado Robotic Testing (CRT) ──[/bold]")
@@ -133,7 +180,10 @@ def status(
 
     # Add connection details to status
     connection_info = {
-        "Salesforce Org": settings.copado_sf_instance_url or "Not configured",
+        "Salesforce Org": settings.sf_instance_url or settings.copado_sf_instance_url or "Not configured",
+        "SF Username": settings.sf_username or "Not configured",
+        "SF Client ID": (settings.sf_client_id[:8] + "...") if settings.sf_client_id else "Not configured",
+        "Pipeline ID": settings.copado_actions_pipeline_id or "Not configured",
         "CRT URL": settings.copado_crt_base_url or "Not configured",
         "CRT Org ID": settings.crt_org_id or "Not configured",
         "CRT Project ID": settings.crt_project_id or "Not configured",
