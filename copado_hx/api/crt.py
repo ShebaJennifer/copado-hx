@@ -25,7 +25,7 @@ def _get_client() -> BaseClient:
     return BaseClient(
         base_url=settings.copado_crt_base_url,
         headers={
-            "Authorization": f"PAK {token}",
+            "X-Authorization": token,
             "Content-Type": "application/json",
         },
     )
@@ -56,7 +56,22 @@ def list_test_jobs(project_id: Optional[str] = None) -> list[dict]:
     pid = project_id or _project_id()
     oid = _org_id()
     params = {"orgId": oid} if oid else None
-    return client.get(f"/pace/v4/projects/{pid}/jobs", params=params)
+    response = client.get(f"/pace/v4/projects/{pid}/jobs", params=params)
+    
+    # Normalize CRT response to expected format
+    if isinstance(response, dict) and "data" in response:
+        jobs = response["data"]
+        # Map CRT fields to CLI expected fields
+        normalized = []
+        for job in jobs:
+            normalized.append({
+                "jobId": str(job.get("id", "")),
+                "name": job.get("name", ""),
+                "testCount": len(job.get("tests", [])) if "tests" in job else "N/A"
+            })
+        return normalized
+    
+    return response
 
 
 # ---------------------------------------------------------------------------
@@ -74,7 +89,17 @@ def run_test(job_id: str, project_id: Optional[str] = None) -> dict:
     url = f"/pace/v4/projects/{pid}/jobs/{job_id}/builds"
     if oid:
         url += f"?orgId={oid}"
-    return client.post(url)
+    response = client.post(url)
+    
+    # Normalize CRT response to extract execution ID
+    if isinstance(response, dict) and "data" in response:
+        data = response["data"]
+        # Add executionId field for CLI compatibility
+        if "id" in data:
+            data["executionId"] = str(data["id"])
+        return response
+    
+    return response
 
 
 def get_test_status(
@@ -102,11 +127,49 @@ def get_test_results(
     if _is_mock():
         return mock_data.mock_test_results(execution_id)
 
-    client = _get_client()
-    pid = project_id or _project_id()
-    oid = _org_id()
-    params = {"orgId": oid} if oid else None
-    return client.get(
-        f"/pace/v4/projects/{pid}/jobs/{job_id}/builds/{execution_id}/results",
-        params=params,
-    )
+    # Results are included in the status response - no separate results endpoint
+    response = get_test_status(execution_id, job_id, project_id)
+    
+    # Normalize CRT response to CLI expected format
+    if isinstance(response, dict) and "data" in response:
+        data = response["data"]
+        
+        # Extract test statistics from CRT response
+        json_report = data.get("jsonObjReport", {})
+        if isinstance(json_report, dict) and "statistics" in json_report:
+            # Use CRT's JSON report statistics
+            stats = json_report["statistics"]
+            total_stats = stats.get("total", [])
+            if isinstance(total_stats, list) and total_stats:
+                main_stats = total_stats[0]
+                total = int(main_stats.get("pass", 0)) + int(main_stats.get("fail", 0)) + int(main_stats.get("skip", 0))
+                passed = int(main_stats.get("pass", 0))
+                failed = int(main_stats.get("fail", 0))
+                skipped = int(main_stats.get("skip", 0))
+            else:
+                total = passed = failed = skipped = 0
+            
+            # Extract failures from suites data
+            failures = []
+            suites = json_report.get("suites", [])
+            for suite in suites:
+                for test in suite.get("tests", []):
+                    if test.get("status") == "failed":
+                        failures.append({
+                            "testName": test.get("name", "Unknown"),
+                            "class": suite.get("name", "Test"),
+                            "error": test.get("failure", {}).get("message", "Test failed")
+                        })
+            
+            return {
+                "totalTests": total,
+                "passed": passed,
+                "failed": failed,
+                "skipped": skipped,
+                "passRate": f"{(passed/total*100):.1f}%" if total > 0 else "0%",
+                "duration": data.get("duration", "N/A"),
+                "testResult": "Failed" if failed > 0 else "Succeeded",
+                "failures": failures
+            }
+    
+    return response
