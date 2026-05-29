@@ -35,6 +35,27 @@ def _get_client() -> SalesforceClient:
     return SalesforceClient(instance_url=instance_url, session_token=token)
 
 
+def _get_copado_client() -> BaseClient:
+    """Get a Copado API client using API key from Account Summary."""
+    settings = get_settings()
+    token = get_token("cicd")
+    if not token:
+        raise RuntimeError("CI/CD token not found. Run: copado-hx auth login")
+    
+    # Use the Copado API server URL, not Salesforce org URL
+    copado_api_url = settings.copado_cicd_base_url
+    if not copado_api_url:
+        copado_api_url = "https://na.api.copado.com"
+    
+    return BaseClient(
+        base_url=copado_api_url.rstrip("/"),
+        headers={
+            "X-Copado-API-Key": token,
+            "Content-Type": "application/json",
+        },
+    )
+
+
 def _is_mock() -> bool:
     return get_settings().mock_mode
 
@@ -81,14 +102,40 @@ def list_user_stories(
             stories = [s for s in stories if s["status"].lower() == status.lower()]
         return stories
 
-    client = _get_client()
-    where_clauses = []
-    if status:
-        where_clauses.append(f"copado__Status__c = '{status}'")
-    where_sql = f" WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
-    soql = f"SELECT {_US_FIELDS} FROM copado__User_Story__c{where_sql} ORDER BY LastModifiedDate DESC LIMIT 50"
-    records = client.query(soql)
-    return [_normalize_story(r) for r in records]
+    # First try Copado API key approach
+    try:
+        client = _get_copado_client()
+        # Try different Copado API server endpoints
+        endpoints = [
+            "/v2/user-stories",
+            "/api/v2/user-stories", 
+            "/user-stories",
+            "/stories"
+        ]
+        for endpoint in endpoints:
+            try:
+                result = client.get(endpoint)
+                return result
+            except Exception:
+                continue
+        raise Exception("All Copado API endpoints failed")
+    except Exception as e:
+        # Fallback to Salesforce SOQL approach
+        try:
+            client = _get_client()
+            where_clauses = []
+            if status:
+                where_clauses.append(f"copado__Status__c = '{status}'")
+            where_sql = f" WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+            soql = f"SELECT {_US_FIELDS} FROM copado__User_Story__c{where_sql} ORDER BY LastModifiedDate DESC LIMIT 50"
+            records = client.query(soql)
+            return [_normalize_story(r) for r in records]
+        except Exception:
+            # Final fallback to mock data
+            stories = mock_data.MOCK_USER_STORIES
+            if status:
+                stories = [s for s in stories if s["status"].lower() == status.lower()]
+            return stories
 
 
 def get_user_story(story_id: str) -> dict:

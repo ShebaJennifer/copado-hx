@@ -22,7 +22,7 @@ class Settings(BaseModel):
 
     # Copado API base URLs
     copado_sf_instance_url: str = Field(default="", description="Salesforce org URL (e.g. https://myorg.my.salesforce.com)")
-    copado_cicd_base_url: str = Field(default="", description="Base URL for Copado CI/CD REST API (auto-derived from SF instance URL if blank)")
+    copado_cicd_base_url: str = Field(default="https://na.api.copado.com", description="Base URL for Copado CI/CD REST API")
     copado_crt_base_url: str = Field(default="https://eu-robotic.copado.com", description="Base URL for CRT Open API")
     copado_ai_base_url: str = Field(
         default="https://copadogpt-api.robotic.copado.com",
