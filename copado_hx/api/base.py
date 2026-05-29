@@ -79,3 +79,58 @@ class BaseClient:
         except httpx.RequestError as e:
             print_error(f"Network error: {e}")
             raise CopadoAPIError(0, f"Network error: {e}")
+
+    def patch(self, path: str, json_body: Optional[dict] = None) -> Any:
+        try:
+            resp = httpx.patch(
+                self._url(path),
+                headers=self.headers,
+                json=json_body,
+                timeout=self.timeout,
+            )
+            return self._handle_response(resp)
+        except httpx.RequestError as e:
+            print_error(f"Network error: {e}")
+            raise CopadoAPIError(0, f"Network error: {e}")
+
+
+class SalesforceClient(BaseClient):
+    """Salesforce REST API client with SOQL query support for Copado CI/CD."""
+
+    def __init__(self, instance_url: str, session_token: str, timeout: int = 60):
+        # Salesforce REST API base: /services/data/vXX.0
+        base_url = f"{instance_url.rstrip('/')}/services/data/v62.0"
+        headers = {
+            "Authorization": f"Bearer {session_token}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        }
+        super().__init__(base_url=base_url, headers=headers, timeout=timeout)
+        self.instance_url = instance_url.rstrip("/")
+
+    def query(self, soql: str) -> list[dict]:
+        """Execute a SOQL query and return the list of records."""
+        import urllib.parse
+        encoded = urllib.parse.quote(soql)
+        result = self.get(f"/query?q={encoded}")
+        if isinstance(result, dict):
+            return result.get("records", [])
+        return []
+
+    def query_one(self, soql: str) -> Optional[dict]:
+        """Execute a SOQL query and return the first record or None."""
+        records = self.query(soql)
+        return records[0] if records else None
+
+    def apexrest(self, path: str, method: str = "GET", json_body: Optional[dict] = None) -> Any:
+        """Call a Copado Apex REST endpoint (e.g. /services/apexrest/copado/v1/...)."""
+        url = f"{self.instance_url}/services/apexrest/{path.lstrip('/')}"
+        try:
+            if method.upper() == "GET":
+                resp = httpx.get(url, headers=self.headers, timeout=self.timeout)
+            else:
+                resp = httpx.post(url, headers=self.headers, json=json_body, timeout=self.timeout)
+            return self._handle_response(resp)
+        except httpx.RequestError as e:
+            print_error(f"Network error: {e}")
+            raise CopadoAPIError(0, f"Network error: {e}")

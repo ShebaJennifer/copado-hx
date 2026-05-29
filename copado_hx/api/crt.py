@@ -20,6 +20,8 @@ from copado_hx.utils.config import get_settings
 def _get_client() -> BaseClient:
     settings = get_settings()
     token = get_token("crt")
+    if not token:
+        raise RuntimeError("CRT token not found. Run: copado-hx auth login")
     return BaseClient(
         base_url=settings.copado_crt_base_url,
         headers={
@@ -31,6 +33,10 @@ def _get_client() -> BaseClient:
 
 def _project_id() -> str:
     return get_settings().crt_project_id
+
+
+def _org_id() -> str:
+    return get_settings().crt_org_id
 
 
 def _is_mock() -> bool:
@@ -48,7 +54,9 @@ def list_test_jobs(project_id: Optional[str] = None) -> list[dict]:
 
     client = _get_client()
     pid = project_id or _project_id()
-    return client.get(f"/pace/v4/projects/{pid}/jobs")
+    oid = _org_id()
+    params = {"orgId": oid} if oid else None
+    return client.get(f"/pace/v4/projects/{pid}/jobs", params=params)
 
 
 # ---------------------------------------------------------------------------
@@ -62,7 +70,11 @@ def run_test(job_id: str, project_id: Optional[str] = None) -> dict:
 
     client = _get_client()
     pid = project_id or _project_id()
-    return client.post(f"/pace/v4/projects/{pid}/jobs/{job_id}/builds")
+    oid = _org_id()
+    url = f"/pace/v4/projects/{pid}/jobs/{job_id}/builds"
+    if oid:
+        url += f"?orgId={oid}"
+    return client.post(url)
 
 
 def get_test_status(
@@ -76,7 +88,9 @@ def get_test_status(
 
     client = _get_client()
     pid = project_id or _project_id()
-    return client.get(f"/pace/v4/projects/{pid}/jobs/{job_id}/builds/{execution_id}")
+    oid = _org_id()
+    params = {"orgId": oid} if oid else None
+    return client.get(f"/pace/v4/projects/{pid}/jobs/{job_id}/builds/{execution_id}", params=params)
 
 
 def get_test_results(
@@ -90,4 +104,9 @@ def get_test_results(
 
     client = _get_client()
     pid = project_id or _project_id()
-    return client.get(f"/pace/v4/projects/{pid}/jobs/{job_id}/builds/{execution_id}/results")
+    oid = _org_id()
+    params = {"orgId": oid} if oid else None
+    return client.get(
+        f"/pace/v4/projects/{pid}/jobs/{job_id}/builds/{execution_id}/results",
+        params=params,
+    )

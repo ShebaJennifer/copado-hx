@@ -2,28 +2,37 @@
 Copado CI/CD (Agentia Pro) — Actions REST API client.
 
 Covers: user stories, commit, promote, validate, deploy, job status, environments.
+
+Real mode uses two API styles:
+  - Salesforce REST API + SOQL for reading Copado objects (user stories, jobs, environments)
+  - Copado Apex REST endpoints for actions (commit, promote, deploy)
 """
 
 from __future__ import annotations
 
 from typing import Optional
 
-from copado_hx.api.base import BaseClient
+from copado_hx.api.base import BaseClient, SalesforceClient
 from copado_hx.api import mock_data
 from copado_hx.auth.store import get_token
 from copado_hx.utils.config import get_settings
 
 
-def _get_client() -> BaseClient:
+def _get_client() -> SalesforceClient:
+    """Get a SalesforceClient configured for the Copado org."""
     settings = get_settings()
     token = get_token("cicd")
-    return BaseClient(
-        base_url=settings.copado_cicd_base_url,
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json",
-        },
-    )
+    instance_url = settings.copado_sf_instance_url
+    if not instance_url:
+        raise RuntimeError(
+            "Salesforce instance URL not configured. "
+            "Run: copado-hx auth login  or set copado_sf_instance_url in .copado-hx.json"
+        )
+    if not token:
+        raise RuntimeError(
+            "CI/CD token not found. Run: copado-hx auth login"
+        )
+    return SalesforceClient(instance_url=instance_url, session_token=token)
 
 
 def _is_mock() -> bool:
@@ -33,6 +42,33 @@ def _is_mock() -> bool:
 # ---------------------------------------------------------------------------
 # User Stories
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# SOQL field mappings for copado__User_Story__c
+# ---------------------------------------------------------------------------
+
+_US_FIELDS = (
+    "Id, Name, copado__User_Story_Title__c, copado__Status__c, "
+    "copado__Environment__c, copado__Org_Credential__c, "
+    "copado__Developer__c, copado__Project__c, "
+    "LastModifiedDate, CreatedDate"
+)
+
+
+def _normalize_story(record: dict) -> dict:
+    """Convert a Salesforce SOQL record into our standard story dict."""
+    return {
+        "id": record.get("Id", ""),
+        "name": record.get("Name", ""),
+        "title": record.get("copado__User_Story_Title__c", ""),
+        "status": record.get("copado__Status__c", "Unknown"),
+        "environment": record.get("copado__Environment__c", ""),
+        "developer": record.get("copado__Developer__c", ""),
+        "project": record.get("copado__Project__c", ""),
+        "last_modified": record.get("LastModifiedDate", ""),
+        "created": record.get("CreatedDate", ""),
+    }
+
 
 def list_user_stories(
     pipeline: Optional[str] = None,
@@ -46,12 +82,13 @@ def list_user_stories(
         return stories
 
     client = _get_client()
-    params = {}
-    if pipeline:
-        params["pipeline"] = pipeline
+    where_clauses = []
     if status:
-        params["status"] = status
-    return client.get("/user-stories", params=params)
+        where_clauses.append(f"copado__Status__c = '{status}'")
+    where_sql = f" WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+    soql = f"SELECT {_US_FIELDS} FROM copado__User_Story__c{where_sql} ORDER BY LastModifiedDate DESC LIMIT 50"
+    records = client.query(soql)
+    return [_normalize_story(r) for r in records]
 
 
 def get_user_story(story_id: str) -> dict:
@@ -60,7 +97,11 @@ def get_user_story(story_id: str) -> dict:
         return mock_data.mock_story_detail(story_id)
 
     client = _get_client()
-    return client.get(f"/user-stories/{story_id}")
+    soql = f"SELECT {_US_FIELDS} FROM copado__User_Story__c WHERE Name = '{story_id}' LIMIT 1"
+    record = client.query_one(soql)
+    if not record:
+        return {"error": f"User story '{story_id}' not found"}
+    return _normalize_story(record)
 
 
 # ---------------------------------------------------------------------------
@@ -73,8 +114,13 @@ def commit(message: str, story_id: str) -> dict:
         return mock_data.mock_commit(message, story_id)
 
     client = _get_client()
-    return client.post("/actions/commit", {
-        "userStoryId": story_id,
+    # First resolve the story's Salesforce Id from its Name (e.g. US-1234)
+    story = client.query_one(
+        f"SELECT Id FROM copado__User_Story__c WHERE Name = '{story_id}' LIMIT 1"
+    )
+    sf_id = story["Id"] if story else story_id
+    return client.apexrest("copado/v1/webhook/commitFiles", method="POST", json_body={
+        "userStoryId": sf_id,
         "message": message,
     })
 
@@ -85,9 +131,13 @@ def promote(story_id: str, environment: str, validate_only: bool = False) -> dic
         return mock_data.mock_promote(story_id, environment, validate_only)
 
     client = _get_client()
-    endpoint = "/actions/validate" if validate_only else "/actions/promote"
-    return client.post(endpoint, {
-        "userStoryId": story_id,
+    story = client.query_one(
+        f"SELECT Id FROM copado__User_Story__c WHERE Name = '{story_id}' LIMIT 1"
+    )
+    sf_id = story["Id"] if story else story_id
+    action = "validateOnly" if validate_only else "promote"
+    return client.apexrest(f"copado/v1/webhook/{action}", method="POST", json_body={
+        "userStoryId": sf_id,
         "environment": environment,
     })
 
@@ -98,7 +148,7 @@ def deploy(environment: str) -> dict:
         return mock_data.mock_deploy(environment)
 
     client = _get_client()
-    return client.post("/actions/deploy", {
+    return client.apexrest("copado/v1/webhook/deploy", method="POST", json_body={
         "environment": environment,
     })
 
@@ -113,7 +163,21 @@ def get_job_status(job_id: str) -> dict:
         return mock_data.mock_job_status(job_id)
 
     client = _get_client()
-    return client.get(f"/job-executions/{job_id}")
+    soql = (
+        "SELECT Id, Name, copado__Status__c, copado__ErrorMessage__c, "
+        "CreatedDate, LastModifiedDate "
+        f"FROM copado__JobExecution__c WHERE Id = '{job_id}' LIMIT 1"
+    )
+    record = client.query_one(soql)
+    if not record:
+        return {"jobId": job_id, "status": "Not Found"}
+    return {
+        "jobId": record.get("Id", ""),
+        "name": record.get("Name", ""),
+        "status": record.get("copado__Status__c", "Unknown"),
+        "error": record.get("copado__ErrorMessage__c", ""),
+        "lastModified": record.get("LastModifiedDate", ""),
+    }
 
 
 def list_environments() -> list[dict]:
@@ -122,4 +186,17 @@ def list_environments() -> list[dict]:
         return mock_data.MOCK_ENVIRONMENTS
 
     client = _get_client()
-    return client.get("/environments")
+    soql = (
+        "SELECT Id, Name, copado__Platform__c, copado__Type__c "
+        "FROM copado__Environment__c ORDER BY Name"
+    )
+    records = client.query(soql)
+    return [
+        {
+            "id": r.get("Id", ""),
+            "name": r.get("Name", ""),
+            "platform": r.get("copado__Platform__c", ""),
+            "type": r.get("copado__Type__c", ""),
+        }
+        for r in records
+    ]
