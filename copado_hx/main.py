@@ -218,13 +218,27 @@ def demo():
         pass
     time.sleep(STEP_DELAY)
 
+    # Step 9 — AI: Generate Release Notes
+    _step(9, "AI Release Notes", 'copado-hx ai ask --agent release "Generate release notes for US-0000024"')
+    try:
+        from copado_hx.commands.ai import ask as ai_ask
+        ai_ask(
+            agent="release",
+            prompt="Generate concise release notes for user story US-0000024 which adds lead scoring logic",
+            us="US-0000024",
+            json_output=False,
+        )
+    except SystemExit:
+        pass
+    time.sleep(STEP_DELAY)
+
     # Finale
     console.print()
     console.print("[bold cyan]" + "=" * 60 + "[/bold cyan]")
     console.print("[bold green]  DEMO COMPLETE — Full lifecycle from CLI[/bold green]")
     console.print("[bold cyan]" + "=" * 60 + "[/bold cyan]")
     console.print()
-    console.print("[dim]8 steps. Zero browser tabs. One CLI.[/dim]")
+    console.print("[dim]9 steps. Zero browser tabs. One CLI.[/dim]")
     console.print()
 
 
