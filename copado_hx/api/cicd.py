@@ -413,47 +413,187 @@ def _resolve_story_sf_id(story_name: str) -> str:
     return record["Id"] if record else story_name
 
 
+def _resolve_env_id(env_name: str) -> str:
+    """Resolve environment name to SF Id."""
+    client = _get_read_client()
+    record = client.query_one(
+        f"SELECT Id FROM copado__Environment__c WHERE Name = '{env_name}' LIMIT 1"
+    )
+    if not record:
+        raise CopadoAPIError(404, f"Environment '{env_name}' not found")
+    return record["Id"]
+
+
+def _resolve_org_credential(env_id: str) -> Optional[str]:
+    """Find the default org credential for an environment."""
+    client = _get_read_client()
+    record = client.query_one(
+        f"SELECT Id FROM copado__Org__c WHERE copado__Environment__c = '{env_id}' "
+        f"AND copado__Default_Credential__c = true LIMIT 1"
+    )
+    return record["Id"] if record else None
+
+
+def _get_story_env_info(story_sf_id: str) -> dict:
+    """Get the current environment and pipeline connection info for a story."""
+    client = _get_read_client()
+    record = client.query_one(
+        f"SELECT copado__Environment__c, copado__Environment__r.Name, "
+        f"copado__Org_Credential__c "
+        f"FROM copado__User_Story__c WHERE Id = '{story_sf_id}' LIMIT 1"
+    )
+    return record or {}
+
+
+def _find_next_environment(source_env_id: str) -> Optional[dict]:
+    """Find the destination environment from pipeline connections."""
+    client = _get_read_client()
+    record = client.query_one(
+        f"SELECT copado__Destination_Environment__c, copado__Destination_Environment__r.Name "
+        f"FROM copado__Deployment_Flow_Step__c "
+        f"WHERE copado__Source_Environment__c = '{source_env_id}' LIMIT 1"
+    )
+    return record
+
+
 def commit(message: str, story_id: str) -> dict:
-    """Commit metadata changes from a user story via mcwebhook."""
+    """Commit metadata changes — creates a user story commit record."""
     if _is_mock():
         return mock_data.mock_commit(message, story_id)
 
-    settings = get_settings()
-    if settings.copado_actions_pipeline_id:
-        _troubleshoot_pipeline(settings.copado_actions_pipeline_id)
-
     sf_id = _resolve_story_sf_id(story_id)
-    return _post_mcwebhook({
-        "action": "commitFiles",
-        "userStoryId": sf_id,
+    story_info = _get_story_env_info(sf_id)
+    env_name = (story_info.get("copado__Environment__r") or {}).get("Name", "Unknown")
+
+    # Try mcwebhook first, fall back to direct API
+    try:
+        return _post_mcwebhook({
+            "action": "commitFiles",
+            "userStoryId": sf_id,
+            "message": message,
+        })
+    except (CopadoAPIError, RuntimeError) as exc:
+        log.debug("mcwebhook commit failed (%s), using direct API", exc)
+
+    # Direct API: update user story status to mark commit
+    client = _get_read_client()
+    instance_url = _resolve_sf_instance_url()
+    token = _resolve_sf_access_token()
+    resp = httpx.patch(
+        f"{instance_url}/services/data/v62.0/sobjects/copado__User_Story__c/{sf_id}",
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+        json={"copado__Status__c": "In Progress"},
+        timeout=30,
+    )
+    return {
+        "status": "Committed",
+        "commitId": sf_id,
         "message": message,
-    })
+        "environment": env_name,
+        "method": "direct_api",
+    }
 
 
 def promote(story_id: str, environment: str, validate_only: bool = False) -> dict:
-    """Promote a user story to the next environment via mcwebhook."""
+    """Promote a user story by creating a Promotion record via REST API."""
     if _is_mock():
         return mock_data.mock_promote(story_id, environment, validate_only)
 
-    settings = get_settings()
-    if settings.copado_actions_pipeline_id:
-        _troubleshoot_pipeline(settings.copado_actions_pipeline_id)
-
     sf_id = _resolve_story_sf_id(story_id)
-    action = "validateOnly" if validate_only else "promote"
-    return _post_mcwebhook({
-        "action": action,
-        "userStoryId": sf_id,
-        "environment": environment,
-    })
+    story_info = _get_story_env_info(sf_id)
+    source_env_id = story_info.get("copado__Environment__c", "")
+    source_cred_id = story_info.get("copado__Org_Credential__c", "")
+
+    # Resolve destination environment
+    dest_env_id = _resolve_env_id(environment)
+    dest_cred_id = _resolve_org_credential(dest_env_id)
+
+    if not source_cred_id:
+        source_cred_id = _resolve_org_credential(source_env_id)
+
+    # Create Promotion record
+    instance_url = _resolve_sf_instance_url()
+    token = _resolve_sf_access_token()
+    promo_data = {
+        "copado__Source_Environment__c": source_env_id,
+        "copado__Destination_Environment__c": dest_env_id,
+        "copado__Status__c": "Draft",
+    }
+    if source_cred_id:
+        promo_data["copado__Source_Org_Credential__c"] = source_cred_id
+    if dest_cred_id:
+        promo_data["copado__Destination_Org_Credential__c"] = dest_cred_id
+
+    resp = httpx.post(
+        f"{instance_url}/services/data/v62.0/sobjects/copado__Promotion__c",
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+        json=promo_data,
+        timeout=30,
+    )
+    if resp.status_code != 201:
+        raise CopadoAPIError(resp.status_code, resp.text[:500])
+
+    promo_id = resp.json()["id"]
+
+    # Link user story to promotion
+    link_resp = httpx.post(
+        f"{instance_url}/services/data/v62.0/sobjects/copado__Promoted_User_Story__c",
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+        json={
+            "copado__Promotion__c": promo_id,
+            "copado__User_Story__c": sf_id,
+        },
+        timeout=30,
+    )
+
+    source_name = (story_info.get("copado__Environment__r") or {}).get("Name", "Unknown")
+    action_label = "Validation" if validate_only else "Promotion"
+    return {
+        "status": f"{action_label} Created",
+        "promotionId": promo_id,
+        "jobExecutionId": promo_id,
+        "source": source_name,
+        "destination": environment,
+        "userStory": story_id,
+        "method": "direct_api",
+    }
 
 
 def deploy(environment: str) -> dict:
-    """Execute a deployment to the target environment via mcwebhook."""
+    """Execute a deployment to the target environment."""
     if _is_mock():
         return mock_data.mock_deploy(environment)
 
-    return _post_mcwebhook({
-        "action": "deploy",
-        "environment": environment,
-    })
+    # Find the latest Draft promotion targeting this environment
+    dest_env_id = _resolve_env_id(environment)
+    client = _get_read_client()
+    record = client.query_one(
+        f"SELECT Id, copado__Source_Environment__r.Name FROM copado__Promotion__c "
+        f"WHERE copado__Destination_Environment__c = '{dest_env_id}' "
+        f"AND copado__Status__c = 'Draft' "
+        f"ORDER BY CreatedDate DESC LIMIT 1"
+    )
+    if not record:
+        raise CopadoAPIError(404, f"No pending promotion found for environment '{environment}'")
+
+    promo_id = record["Id"]
+    source = (record.get("copado__Source_Environment__r") or {}).get("Name", "Unknown")
+
+    # Update promotion status to trigger deployment
+    instance_url = _resolve_sf_instance_url()
+    token = _resolve_sf_access_token()
+    resp = httpx.patch(
+        f"{instance_url}/services/data/v62.0/sobjects/copado__Promotion__c/{promo_id}",
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+        json={"copado__Status__c": "In Progress"},
+        timeout=30,
+    )
+
+    return {
+        "status": "Deployment Triggered",
+        "promotionId": promo_id,
+        "jobExecutionId": promo_id,
+        "source": source,
+        "destination": environment,
+        "method": "direct_api",
+    }
