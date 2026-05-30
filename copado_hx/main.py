@@ -120,6 +120,115 @@ def version():
 
 
 # ---------------------------------------------------------------------------
+# Demo — one-command showcase of the full lifecycle
+# ---------------------------------------------------------------------------
+
+@app.command("demo")
+def demo():
+    """Run a full lifecycle demo against the live Copado org."""
+    import time
+    from copado_hx.utils.output import print_success, print_info, print_error, print_panel
+
+    STEP_DELAY = 1.5  # seconds between steps for readability
+
+    def _banner():
+        console.print()
+        console.print("[bold cyan]" + "=" * 60 + "[/bold cyan]")
+        console.print("[bold cyan]  copado-hx  LIVE DEMO  —  Full DevOps Lifecycle[/bold cyan]")
+        console.print("[bold cyan]" + "=" * 60 + "[/bold cyan]")
+        console.print()
+        console.print("[dim]Every command hits a real Copado org. No mocks.[/dim]")
+        console.print()
+
+    def _step(num: int, title: str, cmd: str):
+        console.print()
+        console.print(f"[bold yellow]Step {num}[/bold yellow]  [bold]{title}[/bold]")
+        console.print(f"[dim]$ {cmd}[/dim]")
+        console.print()
+        time.sleep(0.5)
+
+    _banner()
+
+    # Step 1 — Auth Status
+    _step(1, "Check Authentication", "copado-hx auth status")
+    try:
+        from copado_hx.commands.auth import status as auth_status_cmd
+        auth_status_cmd(json_output=False)
+    except SystemExit:
+        pass
+    time.sleep(STEP_DELAY)
+
+    # Step 2 — List Environments
+    _step(2, "List Pipeline Environments", "copado-hx env list")
+    try:
+        from copado_hx.commands.env import list_envs
+        list_envs(json_output=False)
+    except SystemExit:
+        pass
+    time.sleep(STEP_DELAY)
+
+    # Step 3 — List User Stories
+    _step(3, "List User Stories", "copado-hx story list")
+    try:
+        from copado_hx.commands.story import list_stories
+        list_stories(status=None, json_output=False)
+    except SystemExit:
+        pass
+    time.sleep(STEP_DELAY)
+
+    # Step 4 — Show Story Detail
+    _step(4, "Show Story Detail", "copado-hx story show --id US-0000024")
+    try:
+        from copado_hx.commands.story import show_story
+        show_story(story_id="US-0000024", json_output=False)
+    except SystemExit:
+        pass
+    time.sleep(STEP_DELAY)
+
+    # Step 5 — Commit
+    _step(5, "Commit Changes", 'copado-hx commit --us US-0000024 -m "feat: lead scoring logic"')
+    try:
+        commit_shortcut(message="feat: lead scoring logic", us="US-0000024", json_output=False)
+    except SystemExit:
+        pass
+    time.sleep(STEP_DELAY)
+
+    # Step 6 — Promote to INT-SFP
+    _step(6, "Promote to Integration", "copado-hx promote --us US-0000024 --env INT-SFP")
+    try:
+        promote_shortcut(env="INT-SFP", us="US-0000024", validate=False, watch=False, json_output=False)
+    except SystemExit:
+        pass
+    time.sleep(STEP_DELAY)
+
+    # Step 7 — Validate in UAT
+    _step(7, "Validate in UAT", "copado-hx promote --us US-0000024 --env UAT-SFP --validate")
+    try:
+        promote_shortcut(env="UAT-SFP", us="US-0000024", validate=True, watch=False, json_output=False)
+    except SystemExit:
+        pass
+    time.sleep(STEP_DELAY)
+
+    # Step 8 — List CRT Tests
+    _step(8, "List CRT Test Jobs", "copado-hx test list")
+    try:
+        from copado_hx.commands.test import list_tests
+        list_tests(project=None, json_output=False)
+    except SystemExit:
+        pass
+    time.sleep(STEP_DELAY)
+
+    # Finale
+    console.print()
+    console.print("[bold cyan]" + "=" * 60 + "[/bold cyan]")
+    console.print("[bold green]  DEMO COMPLETE — Full lifecycle from CLI[/bold green]")
+    console.print("[bold cyan]" + "=" * 60 + "[/bold cyan]")
+    console.print()
+    console.print("[dim]8 steps. Zero browser tabs. One CLI.[/dim]")
+    console.print()
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
