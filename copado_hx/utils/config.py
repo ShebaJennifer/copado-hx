@@ -23,9 +23,8 @@ class Settings(BaseModel):
     # ── Salesforce OAuth credentials (for CI/CD reads via SOQL) ──
     sf_instance_url: str = Field(default="", description="Salesforce instance URL (e.g. https://myorg.my.salesforce.com)")
     sf_client_id: str = Field(default="", description="Connected-app consumer key")
-    sf_client_secret: str = Field(default="", description="Connected-app consumer secret")
     sf_username: str = Field(default="", description="Salesforce username for OAuth password flow")
-    # NOTE: sf_password and sf_security_token are stored in keyring, not here
+    # NOTE: sf_client_secret, sf_password, sf_security_token are stored in keyring, not here
 
     # ── Copado CI/CD ──
     copado_cicd_base_url: str = Field(default="https://na.api.copado.com", description="(legacy) Copado API server — reads now use SF REST")

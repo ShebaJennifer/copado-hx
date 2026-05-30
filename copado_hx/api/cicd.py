@@ -41,9 +41,9 @@ def _resolve_sf_access_token() -> str:
     """Return the best available Salesforce access token.
 
     Priority:
-      1. Dedicated sf_access_token (Session ID / OAuth token pasted directly)
+      1. Dedicated sf_access_token (Session ID / OAuth token stored in keyring)
       2. Legacy cicd token (backward compat)
-      3. OAuth password flow (sf_client_id + sf_password) — TODO future
+      3. OAuth password flow (auto-fetch if creds are available)
     """
     token = get_token("sf_access_token")
     if token:
@@ -51,10 +51,58 @@ def _resolve_sf_access_token() -> str:
     token = get_token("cicd")
     if token:
         return token
+
+    # Attempt OAuth password flow on-the-fly
+    token = _oauth_password_flow()
+    if token:
+        return token
+
     raise RuntimeError(
         "No Salesforce access token found.\n"
-        "Run: copado-hx auth login  and provide an SF Access Token or Session ID."
+        "Run: copado-hx auth login  to configure OAuth credentials."
     )
+
+
+def _oauth_password_flow() -> Optional[str]:
+    """Try to obtain a fresh SF access token via OAuth password grant.
+
+    Returns the token on success, None if required creds are missing.
+    Raises on auth errors so troubleshooting messages propagate.
+    """
+    from copado_hx.auth.sf_oauth import password_grant, SFOAuthError
+    from copado_hx.auth.store import store_token
+
+    settings = get_settings()
+    client_id = settings.sf_client_id
+    client_secret = get_token("sf_client_secret")
+    username = settings.sf_username
+    password = get_token("sf_password")
+
+    if not all([client_id, client_secret, username, password]):
+        return None
+
+    login_url = settings.sf_instance_url or "https://login.salesforce.com"
+    security_token = get_token("sf_security_token") or ""
+
+    log.debug("Attempting OAuth password flow for %s @ %s", username, login_url)
+    try:
+        result = password_grant(
+            login_url=login_url,
+            client_id=client_id,
+            client_secret=client_secret,
+            username=username,
+            password=password,
+            security_token=security_token,
+        )
+    except SFOAuthError:
+        raise  # Let the clear error message propagate
+
+    # Cache the token for subsequent calls
+    store_token("sf_access_token", result.access_token)
+    from copado_hx.utils.config import update_settings
+    update_settings(sf_instance_url=result.instance_url, copado_sf_instance_url=result.instance_url)
+    log.debug("OAuth success — instance_url=%s", result.instance_url)
+    return result.access_token
 
 
 def _resolve_sf_instance_url() -> str:

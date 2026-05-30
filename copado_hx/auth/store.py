@@ -24,7 +24,9 @@ SERVICE_PREFIX = "copado-hx"
 TOKEN_TYPES = {
     "cicd": "Copado CI/CD API Token (legacy)",
     "sf_access_token": "Salesforce OAuth Access Token",
-    "sf_password": "Salesforce Password + Security Token",
+    "sf_client_secret": "SF Connected-App Client Secret",
+    "sf_password": "Salesforce Password",
+    "sf_security_token": "Salesforce Security Token",
     "copado_actions_key": "Copado Actions API Key (webhook)",
     "crt": "CRT Personal Access Key (PAK)",
     "ai": "Copado AI Platform API Key",
@@ -60,10 +62,16 @@ def delete_token(token_type: str) -> None:
         pass  # Already gone
 
 
+# Token types shown in `auth status` (hides internal/secret entries)
+_DISPLAY_TOKENS = {"sf_access_token", "copado_actions_key", "crt", "ai"}
+
+
 def get_auth_status() -> dict:
     """Check which tokens are stored and return a summary."""
     status = {}
     for token_type, label in TOKEN_TYPES.items():
+        if token_type not in _DISPLAY_TOKENS:
+            continue
         token = get_token(token_type)
         if token:
             # Show only last 4 chars for security
