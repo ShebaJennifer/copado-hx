@@ -52,8 +52,8 @@ def _resolve_sf_access_token() -> str:
     if token:
         return token
 
-    # Attempt OAuth password flow on-the-fly
-    token = _oauth_password_flow()
+    # Attempt OAuth auto-refresh (browser or password flow)
+    token = _oauth_auto_refresh()
     if token:
         return token
 
@@ -63,28 +63,46 @@ def _resolve_sf_access_token() -> str:
     )
 
 
-def _oauth_password_flow() -> Optional[str]:
-    """Try to obtain a fresh SF access token via OAuth password grant.
+def _oauth_auto_refresh() -> Optional[str]:
+    """Try to obtain a fresh SF access token automatically.
 
-    Returns the token on success, None if required creds are missing.
-    Raises on auth errors so troubleshooting messages propagate.
+    Tries browser flow first, then password flow.
+    Returns the token on success, None if required config is missing.
     """
-    from copado_hx.auth.sf_oauth import password_grant, SFOAuthError
+    from copado_hx.auth.sf_oauth import browser_login, password_grant, SFOAuthError
     from copado_hx.auth.store import store_token
 
     settings = get_settings()
     client_id = settings.sf_client_id
-    client_secret = get_token("sf_client_secret")
-    username = settings.sf_username
-    password = get_token("sf_password")
-
-    if not all([client_id, client_secret, username, password]):
+    if not client_id:
         return None
 
+    client_secret = get_token("sf_client_secret") or ""
     login_url = settings.sf_instance_url or "https://login.salesforce.com"
-    security_token = get_token("sf_security_token") or ""
 
-    log.debug("Attempting OAuth password flow for %s @ %s", username, login_url)
+    # Try browser flow (interactive)
+    log.debug("Attempting browser OAuth flow @ %s", login_url)
+    try:
+        result = browser_login(
+            login_url=login_url,
+            client_id=client_id,
+            client_secret=client_secret,
+        )
+        store_token("sf_access_token", result.access_token)
+        from copado_hx.utils.config import update_settings
+        update_settings(sf_instance_url=result.instance_url, copado_sf_instance_url=result.instance_url)
+        log.debug("Browser OAuth success — instance_url=%s", result.instance_url)
+        return result.access_token
+    except SFOAuthError:
+        log.debug("Browser OAuth failed, trying password flow")
+
+    # Try password flow (headless)
+    username = settings.sf_username
+    password = get_token("sf_password")
+    if not all([username, password]):
+        return None
+
+    security_token = get_token("sf_security_token") or ""
     try:
         result = password_grant(
             login_url=login_url,
@@ -94,15 +112,13 @@ def _oauth_password_flow() -> Optional[str]:
             password=password,
             security_token=security_token,
         )
+        store_token("sf_access_token", result.access_token)
+        from copado_hx.utils.config import update_settings
+        update_settings(sf_instance_url=result.instance_url, copado_sf_instance_url=result.instance_url)
+        log.debug("Password OAuth success — instance_url=%s", result.instance_url)
+        return result.access_token
     except SFOAuthError:
-        raise  # Let the clear error message propagate
-
-    # Cache the token for subsequent calls
-    store_token("sf_access_token", result.access_token)
-    from copado_hx.utils.config import update_settings
-    update_settings(sf_instance_url=result.instance_url, copado_sf_instance_url=result.instance_url)
-    log.debug("OAuth success — instance_url=%s", result.instance_url)
-    return result.access_token
+        return None
 
 
 def _resolve_sf_instance_url() -> str:

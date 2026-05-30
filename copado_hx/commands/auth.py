@@ -28,37 +28,34 @@ from copado_hx.utils.output import print_success, print_error, print_info, smart
 auth_app = typer.Typer(help="Manage authentication for Copado APIs.")
 
 
-def _try_oauth_flow(login_url: str) -> None:
-    """Attempt SF OAuth password grant using stored credentials.
+def _try_oauth_flow(login_url: str) -> bool:
+    """Attempt SF OAuth to obtain an access token.
 
-    Requires: sf_client_id (config), sf_client_secret (keyring),
-              sf_username (config), sf_password (keyring).
-    On success: stores access_token and updates sf_instance_url.
-    On failure: prints the error with troubleshooting hints.
+    Strategy (in order):
+      1. Browser-based authorization code flow (works on all orgs)
+      2. Username-password flow (fallback for headless envs)
+
+    Returns True if a token was obtained, False otherwise.
     """
-    from copado_hx.auth.sf_oauth import password_grant, SFOAuthError
+    from copado_hx.auth.sf_oauth import browser_login, password_grant, SFOAuthError
     from copado_hx.auth.store import get_token as _get_token
 
     settings = get_settings()
     client_id = settings.sf_client_id
-    client_secret = _get_token("sf_client_secret")
-    username = settings.sf_username
-    password = _get_token("sf_password")
-    security_token = _get_token("sf_security_token") or ""
+    client_secret = _get_token("sf_client_secret") or ""
 
-    if not all([client_id, client_secret, username, password]):
-        print_info("  OAuth auto-login skipped (missing credentials).")
-        return
+    if not client_id:
+        print_info("  OAuth skipped (no client ID configured).")
+        return False
 
-    print_info("\n  Authenticating via SF OAuth password flow...")
+    # ── Try 1: Browser flow ──
+    print_info("\n  Opening browser for Salesforce login...")
+    print_info("  (Waiting up to 120 seconds — log in and approve access)")
     try:
-        result = password_grant(
+        result = browser_login(
             login_url=login_url,
             client_id=client_id,
             client_secret=client_secret,
-            username=username,
-            password=password,
-            security_token=security_token,
         )
         store_token("sf_access_token", result.access_token)
         update_settings(
@@ -67,9 +64,38 @@ def _try_oauth_flow(login_url: str) -> None:
         )
         print_success(f"  OAuth success! Instance: {result.instance_url}")
         print_success(f"  Access token stored (****{result.access_token[-4:]})")
+        return True
     except SFOAuthError as exc:
-        print_error(f"  {exc}")
-        print_warning("  You can still paste an access token manually later.")
+        print_warning(f"  Browser login failed: {exc}")
+
+    # ── Try 2: Password flow (if credentials are available) ──
+    username = settings.sf_username
+    password = _get_token("sf_password")
+    if username and password:
+        security_token = _get_token("sf_security_token") or ""
+        print_info("  Trying password flow as fallback...")
+        try:
+            result = password_grant(
+                login_url=login_url,
+                client_id=client_id,
+                client_secret=client_secret,
+                username=username,
+                password=password,
+                security_token=security_token,
+            )
+            store_token("sf_access_token", result.access_token)
+            update_settings(
+                sf_instance_url=result.instance_url,
+                copado_sf_instance_url=result.instance_url,
+            )
+            print_success(f"  OAuth success! Instance: {result.instance_url}")
+            print_success(f"  Access token stored (****{result.access_token[-4:]})")
+            return True
+        except SFOAuthError as exc:
+            print_warning(f"  Password flow failed: {exc}")
+
+    print_warning("  Could not obtain token automatically. You can paste one manually later.")
+    return False
 
 
 @auth_app.command("login")
@@ -112,34 +138,13 @@ def login(
             update_settings(sf_client_id=sf_client_id.strip())
 
         sf_client_secret = Prompt.ask(
-            "  Connected App Client Secret", default="", password=True
+            "  Connected App Client Secret (blank to reuse stored)", default="", password=True
         )
         if sf_client_secret.strip():
             store_token("sf_client_secret", sf_client_secret.strip())
             print_success("SF client secret: stored in keyring")
 
-        sf_user = Prompt.ask(
-            "  Salesforce username",
-            default=settings.sf_username or "",
-        )
-        if sf_user.strip():
-            update_settings(sf_username=sf_user.strip())
-
-        sf_pass = Prompt.ask("  Salesforce password", default="", password=True)
-        if sf_pass.strip():
-            store_token("sf_password", sf_pass.strip())
-            print_success("SF password: stored")
-        else:
-            print_info("SF password: skipped")
-
-        sf_sec_token = Prompt.ask(
-            "  Salesforce security token (blank if IP-whitelisted)", default="", password=True
-        )
-        if sf_sec_token.strip():
-            store_token("sf_security_token", sf_sec_token.strip())
-            print_success("SF security token: stored")
-
-        # ── Auto-run OAuth if we have all four pieces ──
+        # ── Browser OAuth — opens browser, captures token automatically ──
         _try_oauth_flow(sf_url)
 
         # Copado Actions API Key (for mcwebhook calls)
