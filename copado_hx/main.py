@@ -27,6 +27,7 @@ from copado_hx.commands.story import story_app
 from copado_hx.commands.pipeline import pipeline_app
 from copado_hx.commands.test import test_app
 from copado_hx.commands.ai import ai_app
+from copado_hx.commands.env import env_app
 
 console = Console()
 
@@ -51,6 +52,7 @@ app.add_typer(auth_app, name="auth")
 app.add_typer(story_app, name="story")
 app.add_typer(test_app, name="test")
 app.add_typer(ai_app, name="ai")
+app.add_typer(env_app, name="env")
 
 # Pipeline commands are registered both as a group and as top-level shortcuts
 app.add_typer(pipeline_app, name="pipeline", hidden=True)

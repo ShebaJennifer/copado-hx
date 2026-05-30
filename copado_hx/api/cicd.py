@@ -274,7 +274,7 @@ def _troubleshoot_pipeline(pipeline_id: str) -> None:
 
 _US_FIELDS = (
     "Id, Name, copado__User_Story_Title__c, copado__Status__c, "
-    "copado__Environment__c, copado__Org_Credential__c, "
+    "copado__Environment__c, copado__Environment__r.Name, copado__Org_Credential__c, "
     "copado__Developer__c, copado__Project__c, "
     "LastModifiedDate, CreatedDate"
 )
@@ -282,12 +282,15 @@ _US_FIELDS = (
 
 def _normalize_story(record: dict) -> dict:
     """Convert a Salesforce SOQL record into our standard story dict."""
+    # Resolve environment name from relationship field
+    env_rel = record.get("copado__Environment__r") or {}
+    env_name = env_rel.get("Name", "") if isinstance(env_rel, dict) else ""
     return {
         "id": record.get("Id", ""),
         "name": record.get("Name", ""),
         "title": record.get("copado__User_Story_Title__c", ""),
         "status": record.get("copado__Status__c", "Unknown"),
-        "environment": record.get("copado__Environment__c", ""),
+        "environment": env_name or record.get("copado__Environment__c", ""),
         "developer": record.get("copado__Developer__c", ""),
         "project": record.get("copado__Project__c", ""),
         "last_modified": record.get("LastModifiedDate", ""),
