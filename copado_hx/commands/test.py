@@ -114,7 +114,7 @@ def run_test(
 @test_app.command("status")
 def test_status(
     execution: str = typer.Option(..., "--execution", "-e", help="Execution ID to check"),
-    job_id: Optional[str] = typer.Option(None, "--job", "-j", help="CRT job ID"),
+    job_id: str = typer.Option(..., "--job", "-j", help="CRT job ID (required — from test run output)"),
     project: Optional[str] = typer.Option(None, "--project", "-p", help="CRT project ID"),
     watch: bool = typer.Option(False, "--watch", "-w", help="Live-poll until done"),
     json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
@@ -124,13 +124,13 @@ def test_status(
         if watch:
             print_info(f"Watching execution [bold]{execution}[/bold]... (Ctrl+C to stop)")
             result = poll_until_done(
-                fetch_fn=lambda: crt.get_test_status(execution, job_id=job_id or "", project_id=project),
+                fetch_fn=lambda: crt.get_test_status(execution, job_id=job_id, project_id=project),
                 status_key="status",
                 watch=True,
                 label=f"Execution {execution}",
             )
         else:
-            result = crt.get_test_status(execution, job_id=job_id or "", project_id=project)
+            result = crt.get_test_status(execution, job_id=job_id, project_id=project)
 
         smart_output(result, json_mode=json_output, title=f"Test Status — {execution}")
     except Exception as e:
@@ -145,7 +145,7 @@ def test_status(
 @test_app.command("results")
 def test_results(
     execution: str = typer.Option(..., "--execution", "-e", help="Execution ID"),
-    job_id: Optional[str] = typer.Option(None, "--job", "-j", help="CRT job ID"),
+    job_id: str = typer.Option(..., "--job", "-j", help="CRT job ID (required — from test run output)"),
     project: Optional[str] = typer.Option(None, "--project", "-p", help="CRT project ID"),
     format: str = typer.Option("table", "--format", "-f", help="Output format: table | json | pdf"),
     json_output: bool = typer.Option(False, "--json", help="Output as JSON (shortcut for --format json)"),
@@ -154,7 +154,7 @@ def test_results(
     use_json = json_output or format.lower() == "json"
 
     try:
-        results = crt.get_test_results(execution, job_id=job_id or "", project_id=project)
+        results = crt.get_test_results(execution, job_id=job_id, project_id=project)
 
         if use_json:
             smart_output(results, json_mode=True)

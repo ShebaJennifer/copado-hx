@@ -133,43 +133,74 @@ def get_test_results(
     # Normalize CRT response to CLI expected format
     if isinstance(response, dict) and "data" in response:
         data = response["data"]
-        
-        # Extract test statistics from CRT response
-        json_report = data.get("jsonObjReport", {})
-        if isinstance(json_report, dict) and "statistics" in json_report:
-            # Use CRT's JSON report statistics
-            stats = json_report["statistics"]
-            total_stats = stats.get("total", [])
-            if isinstance(total_stats, list) and total_stats:
-                main_stats = total_stats[0]
-                total = int(main_stats.get("pass", 0)) + int(main_stats.get("fail", 0)) + int(main_stats.get("skip", 0))
-                passed = int(main_stats.get("pass", 0))
-                failed = int(main_stats.get("fail", 0))
-                skipped = int(main_stats.get("skip", 0))
-            else:
-                total = passed = failed = skipped = 0
-            
-            # Extract failures from suites data
-            failures = []
-            suites = json_report.get("suites", [])
-            for suite in suites:
-                for test in suite.get("tests", []):
-                    if test.get("status") == "failed":
-                        failures.append({
-                            "testName": test.get("name", "Unknown"),
-                            "class": suite.get("name", "Test"),
-                            "error": test.get("failure", {}).get("message", "Test failed")
-                        })
-            
-            return {
-                "totalTests": total,
-                "passed": passed,
-                "failed": failed,
-                "skipped": skipped,
-                "passRate": f"{(passed/total*100):.1f}%" if total > 0 else "0%",
-                "duration": data.get("duration", "N/A"),
-                "testResult": "Failed" if failed > 0 else "Succeeded",
-                "failures": failures
-            }
-    
+        failures = []
+        total = passed = failed = skipped = 0
+
+        # Strategy 1: xunitReport (real CRT responses)
+        xunit = data.get("xunitReport")
+        if isinstance(xunit, dict):
+            testsuite = xunit.get("testsuite", {})
+            testcases = testsuite.get("testcase", [])
+            if isinstance(testcases, dict):
+                testcases = [testcases]
+            total = len(testcases)
+            for tc in testcases:
+                tc_failures = tc.get("failure", [])
+                if isinstance(tc_failures, dict):
+                    tc_failures = [tc_failures]
+                if tc_failures:
+                    failed += 1
+                    error_msgs = "; ".join(f.get("message", "Test failed") for f in tc_failures)
+                    failures.append({
+                        "testName": tc.get("name", "Unknown"),
+                        "class": tc.get("classname", "Test"),
+                        "error": error_msgs,
+                    })
+                else:
+                    passed += 1
+
+        # Strategy 2: jsonObjReport (alternative CRT format)
+        if total == 0:
+            json_report = data.get("jsonObjReport")
+            if isinstance(json_report, dict) and "statistics" in json_report:
+                stats = json_report["statistics"]
+                total_stats = stats.get("total", [])
+                if isinstance(total_stats, list) and total_stats:
+                    main_stats = total_stats[0]
+                    passed = int(main_stats.get("pass", 0))
+                    failed = int(main_stats.get("fail", 0))
+                    skipped = int(main_stats.get("skip", 0))
+                    total = passed + failed + skipped
+
+                suites = json_report.get("suites", [])
+                for suite in suites:
+                    for test in suite.get("tests", []):
+                        if test.get("status") == "failed":
+                            failures.append({
+                                "testName": test.get("name", "Unknown"),
+                                "class": suite.get("name", "Test"),
+                                "error": test.get("failure", {}).get("message", "Test failed"),
+                            })
+
+        # Strategy 3: top-level status fallback
+        if total == 0 and data.get("status") == "failed":
+            total = 1
+            failed = 1
+            failures.append({
+                "testName": "Build Execution",
+                "class": str(data.get("jobId", "")),
+                "error": f"Build {execution_id} failed (status: {data.get('status')})",
+            })
+
+        return {
+            "totalTests": total,
+            "passed": passed,
+            "failed": failed,
+            "skipped": skipped,
+            "passRate": f"{(passed/total*100):.1f}%" if total > 0 else "0%",
+            "duration": data.get("duration", "N/A"),
+            "testResult": "Failed" if failed > 0 else "Succeeded",
+            "failures": failures,
+        }
+
     return response

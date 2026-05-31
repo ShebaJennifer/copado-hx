@@ -130,15 +130,16 @@ You'll see test suites including "Smoke Test Suite" (15 tests) and "Full Regress
 
 ```powershell
 # "Let me run the smoke tests before deploying"
-copado-hx test run --suite job-smoke-001
+copado-hx test run --job job-smoke-001
 ```
-You'll see "Test execution started" with an execution ID.
+You'll see "Test execution started" with an execution ID (e.g. `exec-abc12345`).
 
 ```powershell
-# "Let me check the results"
-copado-hx test results --execution exec-XXXXXXXX
+# "Let me check the results" (use the execution ID AND job ID from above)
+copado-hx test results --execution exec-abc12345 --job job-smoke-001
 ```
-(Use the execution ID from the previous output)
+
+**IMPORTANT:** Both `--execution` and `--job` are required. The execution ID comes from the `test run` output. The job ID is the same one you used to run the test.
 
 You'll see:
 - **Result:** 14 passed, 1 failed (93% pass rate)
@@ -147,8 +148,8 @@ You'll see:
 - **Failure detail:** Which test failed and why
 
 ```powershell
-# "Let me ask AI to analyze why the test failed"
-copado-hx ai triage --execution exec-XXXXXXXX
+# "Let me ask AI to analyze why the test failed" (both --execution and --job required)
+copado-hx ai triage --execution exec-abc12345 --job job-smoke-001
 ```
 AI will show:
 - Root cause analysis

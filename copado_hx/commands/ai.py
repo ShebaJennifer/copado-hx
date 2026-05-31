@@ -175,6 +175,7 @@ def chat(
 @ai_app.command("triage")
 def triage(
     execution: str = typer.Option(..., "--execution", "-e", help="CRT execution ID with failures"),
+    job_id: str = typer.Option(..., "--job", "-j", help="CRT job ID (required — from test run output)"),
     json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
 ):
     """AI-powered test failure triage — analyze why tests failed and suggest fixes."""
@@ -183,7 +184,7 @@ def triage(
     print_info(f"Fetching test results for execution [bold]{execution}[/bold]...")
 
     try:
-        results = crt.get_test_results(execution)
+        results = crt.get_test_results(execution, job_id=job_id)
         failures = results.get("failures", [])
 
         if not failures:
