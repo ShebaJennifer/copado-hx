@@ -18,6 +18,8 @@ from rich.prompt import Confirm
 
 from copado_hx.api import cicd
 from copado_hx.utils.config import get_settings
+from copado_hx.utils.state import record_action
+from copado_hx.utils.suggestions import print_suggestions
 from copado_hx.utils.output import (
     smart_output,
     print_success,
@@ -73,6 +75,9 @@ def commit_cmd(
             print_info(f"Files committed: {', '.join(files)}")
 
         smart_output(result, json_mode=json_output, title="Commit Result")
+        record_action("commit", last_story=story_id)
+        if not json_output:
+            print_suggestions(after_action="commit")
     except typer.Exit:
         raise
     except Exception as e:
@@ -106,6 +111,9 @@ def promote_cmd(
         job_id = result.get("jobExecutionId", "")
         print_success(f"Promotion triggered — Job: [bold]{job_id}[/bold]")
         smart_output(result, json_mode=json_output, title="Promotion Triggered")
+        record_action("promote", last_story=story_id, last_env=env, last_job_id=job_id)
+        if not json_output:
+            print_suggestions(after_action="promote")
 
         if watch and job_id:
             print_info("Polling for completion...")
@@ -152,6 +160,9 @@ def deploy_cmd(
         job_id = result.get("jobExecutionId", "")
         print_success(f"Deployment triggered — Job: [bold]{job_id}[/bold]")
         smart_output(result, json_mode=json_output, title="Deployment Triggered")
+        record_action("deploy", last_env=env, last_job_id=job_id)
+        if not json_output:
+            print_suggestions(after_action="deploy")
 
         if watch and job_id:
             print_info("Polling for completion...")
@@ -196,7 +207,9 @@ def status_cmd(
                 result = cicd.get_job_status(job)
 
             smart_output(result, json_mode=json_output, title=f"Job Status — {job}")
+            record_action("pipeline_status")
         except Exception as e:
+            record_action("pipeline_status")
             print_error(f"Failed to get job status: {e}")
             raise typer.Exit(1)
     else:
@@ -219,6 +232,7 @@ def status_cmd(
                 pass
 
         smart_output(overview, json_mode=json_output, title="Pipeline Status")
+        record_action("pipeline_status")
 
         if not json_output:
             # Show environments

@@ -94,9 +94,10 @@ def run_test(job_id: str, project_id: Optional[str] = None) -> dict:
     # Normalize CRT response to extract execution ID
     if isinstance(response, dict) and "data" in response:
         data = response["data"]
-        # Add executionId field for CLI compatibility
+        # Add executionId at both data and top level for CLI compatibility
         if "id" in data:
             data["executionId"] = str(data["id"])
+            response["executionId"] = str(data["id"])
         return response
     
     return response
@@ -133,6 +134,22 @@ def get_test_results(
     # Normalize CRT response to CLI expected format
     if isinstance(response, dict) and "data" in response:
         data = response["data"]
+
+        # If still executing, return early with in-progress status
+        status = data.get("status", "")
+        if status in ("executing", "running", "queued", "pending"):
+            return {
+                "totalTests": 0,
+                "passed": 0,
+                "failed": 0,
+                "skipped": 0,
+                "passRate": "—",
+                "duration": "—",
+                "testResult": "In Progress",
+                "failures": [],
+                "status": status,
+            }
+
         failures = []
         total = passed = failed = skipped = 0
 

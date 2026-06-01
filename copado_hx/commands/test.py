@@ -21,6 +21,8 @@ from typing import Optional
 import typer
 
 from copado_hx.api import crt
+from copado_hx.utils.state import record_action
+from copado_hx.utils.suggestions import print_suggestions
 from copado_hx.utils.output import (
     smart_output,
     print_success,
@@ -81,9 +83,12 @@ def run_test(
 
     try:
         result = crt.run_test(job_id=job_id, project_id=project)
-        exec_id = result.get("executionId", "")
+        exec_id = result.get("executionId") or (result.get("data", {}).get("executionId")) or ""
         print_success(f"Test execution started — Execution: [bold]{exec_id}[/bold]")
         smart_output(result, json_mode=json_output, title="Test Execution Started")
+        record_action("test_run", last_execution_id=str(exec_id), last_crt_job_id=str(job_id))
+        if not json_output:
+            print_suggestions(after_action="test_run")
 
         if watch and exec_id:
             print_info("Polling for completion... (Ctrl+C to stop)")
@@ -169,6 +174,14 @@ def test_results(
         pass_rate = results.get("passRate", "N/A")
         test_result = results.get("testResult", "Unknown")
 
+        # Handle in-progress execution
+        if test_result == "In Progress":
+            print_panel("Execution In Progress",
+                        f"[bold yellow]⏳ Test execution [cyan]{execution}[/cyan] is still running.[/bold yellow]\n"
+                        f"Select [bold]View test results[/bold] again in a moment.",
+                        style="yellow")
+            return
+
         # Summary panel
         result_color = "green" if test_result == "Succeeded" else "red"
         summary_lines = [
@@ -193,6 +206,12 @@ def test_results(
         # Deployment Confidence Score — QA Intelligence WOW feature
         console.print()
         _show_confidence_score(results)
+
+        record_action("test_results",
+                      last_execution_id=execution,
+                      last_crt_job_id=job_id,
+                      last_test_result=test_result)
+        print_suggestions(after_action="test_results")
 
     except Exception as e:
         print_error(f"Failed to get test results: {e}")
