@@ -18,6 +18,8 @@ import typer
 
 from copado_hx.api import cicd
 from copado_hx.utils.config import get_settings, update_settings
+from copado_hx.utils.state import record_action
+from copado_hx.utils.suggestions import print_suggestions
 from copado_hx.utils.output import (
     smart_output,
     print_success,
@@ -46,7 +48,9 @@ def list_stories(
             title="User Stories",
             columns=["name", "title", "status", "environment", "last_modified"],
         )
+        record_action("story_list", last_status="success")
     except Exception as e:
+        record_action("story_list", last_status="failed", last_error=str(e))
         print_error(f"Failed to list stories: {e}")
         raise typer.Exit(1)
 
@@ -82,7 +86,9 @@ def show_story(
                     lines.append(f"  - {m.get('name', '?')} ({m.get('type', '?')})")
 
             print_panel(f"User Story — {sid}", "\n".join(lines))
+        record_action("story_show", last_status="success")
     except Exception as e:
+        record_action("story_show", last_status="failed", last_error=str(e))
         print_error(f"Failed to get story: {e}")
         raise typer.Exit(1)
 
@@ -94,6 +100,7 @@ def set_story(
 ):
     """Set the active user story context (like 'git checkout' for Copado)."""
     update_settings(current_story_id=story_id)
+    record_action("story_set", last_story=story_id)
     print_success(f"Working context set to [bold]{story_id}[/bold]")
     print_info("All subsequent commit/promote/deploy commands will use this story.")
 
@@ -103,6 +110,9 @@ def set_story(
         smart_output(detail, json_mode=json_output, title=f"Active Story — {story_id}")
     except Exception:
         print_info("Story details will be available when connected to the Copado API.")
+
+    if not json_output:
+        print_suggestions(after_action="story_set")
 
 
 @story_app.command("create")
@@ -116,6 +126,7 @@ def create_story(
     pipe = pipeline or settings.default_pipeline
 
     if not pipe:
+        record_action("story_create", last_status="failed", last_error="Pipeline ID required")
         print_error("Pipeline ID required. Use --pipeline or set default_pipeline in .copado-hx.json")
         raise typer.Exit(1)
 
@@ -132,6 +143,8 @@ def create_story(
         }
         print_success(f"User story created: [bold]{result['name']}[/bold]")
         smart_output(result, json_mode=json_output, title="New User Story")
+        record_action("story_create", last_status="success")
     else:
+        record_action("story_create", last_status="failed", last_error="Not yet implemented")
         print_error("Story creation via API — not yet implemented. Use Copado UI for now.")
         raise typer.Exit(1)

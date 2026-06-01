@@ -20,6 +20,9 @@ from __future__ import annotations
 
 import typer
 from rich.console import Console
+from rich.table import Table
+from rich.panel import Panel
+from rich import box
 
 from copado_hx import __version__
 from copado_hx.commands.auth import auth_app
@@ -28,6 +31,7 @@ from copado_hx.commands.pipeline import pipeline_app
 from copado_hx.commands.test import test_app
 from copado_hx.commands.ai import ai_app
 from copado_hx.commands.env import env_app
+from copado_hx.commands.workflow import workflow_app
 
 console = Console()
 
@@ -37,15 +41,22 @@ console = Console()
 
 app = typer.Typer(
     name="copado-hx",
-    help=(
-        "copado-hx — The Headless Developer CLI for Copado DevOps.\n\n"
-        "Manage your entire Salesforce release lifecycle from the terminal:\n"
-        "user stories, commits, promotions, deployments, tests, and AI agents.\n\n"
-        "No browser tab required."
-    ),
-    no_args_is_help=True,
+    help="copado-hx — Headless Developer CLI for Copado DevOps",
+    invoke_without_command=True,
+    add_help_option=False,
     rich_markup_mode="rich",
 )
+
+
+@app.callback(invoke_without_command=True)
+def _default(
+    ctx: typer.Context,
+    help: bool = typer.Option(False, "--help", "-h", help="Show this help screen"),
+):
+    """Show custom help when no subcommand is given or --help is used."""
+    if help or ctx.invoked_subcommand is None:
+        _print_help()
+        raise typer.Exit()
 
 # Register command groups
 app.add_typer(auth_app, name="auth")
@@ -56,6 +67,9 @@ app.add_typer(env_app, name="env")
 
 # Pipeline commands are registered both as a group and as top-level shortcuts
 app.add_typer(pipeline_app, name="pipeline", hidden=True)
+
+# Workflow commands (hidden group — exposed as top-level shortcuts below)
+app.add_typer(workflow_app, name="workflow", hidden=True)
 
 
 # ---------------------------------------------------------------------------
@@ -107,6 +121,126 @@ def status_shortcut(
     """Show pipeline status."""
     from copado_hx.commands.pipeline import status_cmd
     status_cmd(job=job, watch=watch, json_output=json_output)
+
+
+# ---------------------------------------------------------------------------
+# Workflow shortcuts — guide, interactive, pick, ship
+# ---------------------------------------------------------------------------
+
+@app.command("guide")
+def guide_shortcut():
+    """Context summary + available actions (non-interactive)."""
+    from copado_hx.commands.workflow import guide_cmd
+    guide_cmd()
+
+
+@app.command("interactive")
+def interactive_shortcut(
+    show_all: bool = typer.Option(False, "--all", "-a", help="Show all available actions table"),
+):
+    """Interactive guided workflow — select → execute → loop."""
+    from copado_hx.commands.workflow import work_cmd
+    work_cmd(show_all=show_all)
+
+
+@app.command("pick")
+def pick_shortcut():
+    """Interactive story picker — choose a story and set context."""
+    from copado_hx.commands.workflow import story_pick
+    story_pick()
+
+
+@app.command("ship")
+def ship_shortcut(
+    us: str = typer.Option(..., "--us", help="User story ID"),
+    to: str = typer.Option(..., "--to", help="Target environment"),
+    skip_tests: bool = typer.Option(False, "--skip-tests", help="Skip CRT test execution"),
+):
+    """Guided end-to-end pipeline: commit → promote → test → deploy."""
+    from copado_hx.commands.workflow import ship
+    ship(us=us, to=to, skip_tests=skip_tests)
+
+
+# ---------------------------------------------------------------------------
+# Help — polished static reference screen
+# ---------------------------------------------------------------------------
+
+def _print_help() -> None:
+    """Render the custom help screen."""
+    console.print()
+    console.print("[bold cyan]copado-hx[/bold cyan] — Headless Developer CLI for Copado DevOps")
+    console.print("[dim]Manage your entire Salesforce release lifecycle from the terminal.[/dim]")
+    console.print("[dim]No browser tab required.[/dim]")
+    console.print()
+
+    # ── Deploy Actions (CI/CD) ──
+    t1 = Table(title="Deploy Actions (CI/CD)", box=box.ROUNDED, show_lines=False,
+               title_style="bold green", expand=False, padding=(0, 2))
+    t1.add_column("Command", style="green", min_width=34, no_wrap=True)
+    t1.add_column("Description", style="white")
+    t1.add_row("auth login",                       "Authenticate with Salesforce + CRT + AI")
+    t1.add_row("auth status",                      "Check authentication state")
+    t1.add_row("auth logout",                      "Clear stored tokens")
+    t1.add_row("story list",                       "List user stories assigned to me")
+    t1.add_row("story show --id <ID>",             "Show user story details")
+    t1.add_row("story set --id <ID>",              "Set working story context")
+    t1.add_row("story create --title \"...\"",       "Create a new user story")
+    t1.add_row("commit -m \"msg\" [--us <ID>]",     "Commit metadata changes")
+    t1.add_row("promote --env <ENV> [--validate]", "Promote to an environment")
+    t1.add_row("deploy --env <ENV> [--yes]",       "Deploy to an environment")
+    t1.add_row("status [--job <ID>] [--watch]",    "Pipeline / job status")
+    t1.add_row("env list",                         "List pipeline environments")
+    console.print(t1)
+    console.print()
+
+    # ── Test Options (CRT) ──
+    t2 = Table(title="Test Options (CRT)", box=box.ROUNDED, show_lines=False,
+               title_style="bold yellow", expand=False, padding=(0, 2))
+    t2.add_column("Command", style="yellow", min_width=34, no_wrap=True)
+    t2.add_column("Description", style="white")
+    t2.add_row("test list",                          "List available test jobs")
+    t2.add_row("test run --job <ID>",                "Run a CRT test job")
+    t2.add_row("test status -e <EXEC> -j <JOB>",    "Check execution status")
+    t2.add_row("test results -e <EXEC> -j <JOB>",   "View results + confidence score")
+    console.print(t2)
+    console.print()
+
+    # ── AI Agents ──
+    t3 = Table(title="AI Agents", box=box.ROUNDED, show_lines=False,
+               title_style="bold magenta", expand=False, padding=(0, 2))
+    t3.add_column("Command", style="magenta", min_width=34, no_wrap=True)
+    t3.add_column("Description", style="white")
+    t3.add_row("ai ask --agent <name> \"prompt\"",   "One-shot question to an AI agent")
+    t3.add_row("ai chat --agent <name>",            "Interactive REPL with an agent")
+    t3.add_row("ai triage -e <EXEC> -j <JOB>",     "AI-powered test failure analysis")
+    t3.add_row("", "[dim]Agents: plan · build · test · release · operate · knowledge[/dim]")
+    console.print(t3)
+    console.print()
+
+    # ── Modes ──
+    t4 = Table(title="Modes", box=box.ROUNDED, show_lines=False,
+               title_style="bold cyan", expand=False, padding=(0, 2))
+    t4.add_column("Mode", style="cyan", min_width=16, no_wrap=True)
+    t4.add_column("Command", style="bold", min_width=18, no_wrap=True)
+    t4.add_column("Description", style="white")
+    t4.add_row("Free-flow",   "[dim](default)[/dim]",         "Run any command directly — no guided mode")
+    t4.add_row("Guide",       "copado-hx guide",              "Context summary + smart recommendations")
+    t4.add_row("Interactive", "copado-hx interactive",         "Select → execute → loop workflow")
+    t4.add_row("",            "",                              "")
+    t4.add_row("",            "copado-hx pick",               "Interactive story picker")
+    t4.add_row("",            "copado-hx ship --us <> --to <>", "End-to-end pipeline")
+    t4.add_row("",            "copado-hx demo",               "Full lifecycle showcase")
+    console.print(t4)
+    console.print()
+
+    console.print(f"[dim]copado-hx v{__version__}[/dim]")
+    console.print()
+
+
+@app.command("help")
+def help_cmd():
+    """Show all available commands and modes."""
+    _print_help()
 
 
 # ---------------------------------------------------------------------------

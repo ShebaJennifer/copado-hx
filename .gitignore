@@ -27,6 +27,7 @@ Thumbs.db
 .env
 .copado-hx-auth.json
 .copado-hx.json
+.copado-hx-state.json
 
 # Distribution
 *.tar.gz

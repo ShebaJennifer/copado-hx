@@ -28,6 +28,8 @@ from rich.prompt import Prompt
 
 from copado_hx.api import ai_platform
 from copado_hx.utils.config import get_settings
+from copado_hx.utils.state import record_action
+from copado_hx.utils.suggestions import print_suggestions
 from copado_hx.utils.output import (
     smart_output,
     print_success,
@@ -45,6 +47,7 @@ AGENT_LABELS = {
     "test": "Test Agent",
     "release": "Release Agent",
     "operate": "Operate Agent",
+    "knowledge": "Knowledge Agent",
 }
 
 
@@ -54,7 +57,7 @@ AGENT_LABELS = {
 
 @ai_app.command("ask")
 def ask(
-    agent: str = typer.Option(..., "--agent", "-a", help="Agent: plan | build | test | release | operate"),
+    agent: str = typer.Option(..., "--agent", "-a", help="Agent: plan | build | test | release | operate | knowledge"),
     prompt: str = typer.Argument(..., help="Your question or instruction for the agent"),
     us: Optional[str] = typer.Option(None, "--us", help="User story ID for context"),
     json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
@@ -97,7 +100,10 @@ def ask(
             console.print(Markdown(content))
             console.print()
 
+        record_action("ai_ask")
+
     except Exception as e:
+        record_action("ai_ask")
         print_error(f"AI request failed: {e}")
         raise typer.Exit(1)
 
@@ -108,7 +114,7 @@ def ask(
 
 @ai_app.command("chat")
 def chat(
-    agent: str = typer.Option(..., "--agent", "-a", help="Agent: plan | build | test | release | operate"),
+    agent: str = typer.Option(..., "--agent", "-a", help="Agent: plan | build | test | release | operate | knowledge"),
     us: Optional[str] = typer.Option(None, "--us", help="User story ID for context"),
 ):
     """Open an interactive chat session with a Copado AI agent (type 'exit' to quit)."""
@@ -165,6 +171,7 @@ def chat(
         print_error(f"Failed to start chat session: {e}")
         raise typer.Exit(1)
 
+    record_action("ai_chat")
     print_info("Chat session ended.")
 
 
@@ -226,6 +233,9 @@ def triage(
             content = response.get("content", "No analysis available.")
             print_panel("AI Triage — Release Agent", "", style="magenta")
             console.print(Markdown(content))
+
+        record_action("ai_triage", last_execution_id=execution, last_crt_job_id=job_id)
+        print_suggestions(after_action="ai_triage")
 
     except Exception as e:
         print_error(f"Triage failed: {e}")

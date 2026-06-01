@@ -23,6 +23,7 @@ from copado_hx.auth.store import (
     TOKEN_TYPES,
 )
 from copado_hx.utils.config import get_settings, update_settings
+from copado_hx.utils.state import record_action
 from copado_hx.utils.output import print_success, print_error, print_info, smart_output, print_panel, print_warning
 
 auth_app = typer.Typer(help="Manage authentication for Copado APIs.")
@@ -220,6 +221,7 @@ def login(
             raise typer.Exit(1)
 
     smart_output(get_auth_status(), json_mode=json_output, title="Auth Status")
+    record_action("auth_login")
 
 
 @auth_app.command("status")
@@ -253,6 +255,7 @@ def status(
         print_panel(title, "\n".join(lines))
         if not authenticated:
             print_info("Run [bold]copado-hx auth login[/bold] to authenticate.")
+    record_action("auth_status")
 
 
 @auth_app.command("logout")
