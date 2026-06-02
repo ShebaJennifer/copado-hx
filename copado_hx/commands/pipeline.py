@@ -121,6 +121,9 @@ def promote_cmd(
                     watch=True,
                     label=f"Validating {story_id}",
                 )
+                # If user exited the polling view, don't process further
+                if not final or final.get("_poll_interrupted"):
+                    return
                 smart_output(final, json_mode=json_output, title="Validation Result")
                 from copado_hx.utils.polling import SUCCESS_STATUSES, FAILURE_STATUSES
                 final_status = final.get("status", "")
@@ -150,13 +153,16 @@ def promote_cmd(
                 print_suggestions(after_action="promote")
 
             if watch and job_id:
-                print_info("Polling for completion...")
+                print_info("Polling for completion... (Ctrl+C to exit this view)")
                 final = poll_until_done(
                     fetch_fn=lambda: cicd.get_job_status(job_id),
                     status_key="status",
                     watch=True,
                     label=f"Promoting {story_id} → {env}",
                 )
+                # If user exited the polling view, don't process further
+                if not final or final.get("_poll_interrupted"):
+                    return
                 smart_output(final, json_mode=json_output, title="Promote Result")
         except typer.Exit:
             raise
@@ -196,13 +202,16 @@ def deploy_cmd(
             print_suggestions(after_action="deploy")
 
         if watch and job_id:
-            print_info("Polling for completion...")
+            print_info("Polling for completion... (Ctrl+C to exit this view)")
             final = poll_until_done(
                 fetch_fn=lambda: cicd.get_job_status(job_id),
                 status_key="status",
                 watch=True,
                 label=f"Deploying {promotion}",
             )
+            # If user exited the polling view, don't process further
+            if not final or final.get("_poll_interrupted"):
+                return
             smart_output(final, json_mode=json_output, title="Deploy Result")
 
     except typer.Exit:
@@ -236,12 +245,16 @@ def merge_deploy_cmd(
         smart_output(promo_result, json_mode=json_output, title="Promote Triggered")
 
         if promo_job_id:
+            print_info("Polling for promotion... (Ctrl+C to exit this view)")
             promo_final = poll_until_done(
                 fetch_fn=lambda: cicd.get_job_status(promo_job_id),
                 status_key="status",
                 watch=True,
                 label=f"Promoting {story_id} → {env}",
             )
+            # If user exited the polling view, don't process further
+            if not promo_final or promo_final.get("_poll_interrupted"):
+                return
             smart_output(promo_final, json_mode=json_output, title="Promote Result")
             from copado_hx.utils.polling import SUCCESS_STATUSES, FAILURE_STATUSES
             if promo_final.get("status", "") in FAILURE_STATUSES:
@@ -260,12 +273,16 @@ def merge_deploy_cmd(
         smart_output(deploy_result, json_mode=json_output, title="Deploy Triggered")
 
         if deploy_job_id:
+            print_info("Polling for deployment... (Ctrl+C to exit this view)")
             deploy_final = poll_until_done(
                 fetch_fn=lambda: cicd.get_job_status(deploy_job_id),
                 status_key="status",
                 watch=True,
                 label=f"Deploying to {env}",
             )
+            # If user exited the polling view, don't process further
+            if not deploy_final or deploy_final.get("_poll_interrupted"):
+                return
             smart_output(deploy_final, json_mode=json_output, title="Deploy Result")
 
         record_action("merge_deploy", last_story=story_id, last_env=env,
@@ -302,6 +319,9 @@ def status_cmd(
                     watch=True,
                     label=f"Job {job}",
                 )
+                # If user exited the polling view, don't process further
+                if not result or result.get("_poll_interrupted"):
+                    return
             else:
                 result = cicd.get_job_status(job)
 

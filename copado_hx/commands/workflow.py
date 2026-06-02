@@ -386,7 +386,8 @@ def _deploy_flow():
                             _do_merge_and_deploy(sid, default_env, promotion_id=validated_promo_id)
                     elif final_status in FAILURE_STATUSES:
                         print_error(f"Validation failed: {final.get('error', final_status)}")
-                    else:
+                    # Skip status message if polling was interrupted
+                    elif not final.get("_poll_interrupted"):
                         print_warning(f"Validation ended with status: {final_status}")
 
             except (SystemExit, KeyboardInterrupt):
@@ -446,7 +447,7 @@ def _do_merge_and_deploy(story_id: str, environment: str, promotion_id: str = ""
 
             if promo_job_id:
                 console.print()
-                print_info("Waiting for promote (Git merge) to complete...")
+                print_info("Waiting for promote (Git merge) to complete... (Ctrl+C to exit this view)")
                 promo_final = poll_until_done(
                     fetch_fn=lambda: cicd.get_job_status(promo_job_id),
                     status_key="status",
@@ -493,7 +494,7 @@ def _do_merge_and_deploy(story_id: str, environment: str, promotion_id: str = ""
 
         if deploy_job_id:
             console.print()
-            print_info("Waiting for deployment to complete...")
+            print_info("Waiting for deployment to complete... (Ctrl+C to exit this view)")
             deploy_final = poll_until_done(
                 fetch_fn=lambda: cicd.get_job_status(deploy_job_id),
                 status_key="status",
