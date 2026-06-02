@@ -58,11 +58,15 @@ Before executing any `copado-hx` command:
 **Output:** JSON with story details including `metadata_scope[]`.
 
 ### `copado-hx commit`
-**Purpose:** Commit metadata changes from the current user story to Git and update the Copado user story record.
+**Purpose:** Commit metadata changes from the current user story to Git via Copado mcwebhook.
 **When to use:** After the developer has made local code/config changes and wants to push them to the feature branch.
-**Syntax:** `copado-hx commit --message <msg> [--us <US-ID>] --json`
-**Output:** JSON with `{ commitId, status, filesCommitted[] }`
+**Syntax:** `copado-hx commit --message <msg> [--us <US-ID>] [--changes <file.json>] [--watch] --json`
+**Flags:**
+- `--changes <file.json>` : JSON file with explicit changes array `[{"a": "Add", "t": "ApexClass", "n": "MyClass"}]`. If omitted, components are auto-detected from `copado__User_Story_Metadata__c` or selected interactively.
+- `--watch` : Poll the job execution until it completes
+**Output:** JSON with `{ jobExecutionId, commitId, status, componentsCount, userStory }`
 **Do not use if:** No user story context is set. Run `copado-hx story set` first.
+**Component detection:** Auto-detect → interactive picker → `--changes` file (in priority order).
 
 ### `copado-hx promote`
 **Purpose:** Promote (Git merge) or validate a user story.
@@ -72,7 +76,7 @@ Before executing any `copado-hx` command:
 - `--env <name>` : Target environment (required for promote, not for validate)
 - `--watch` : Poll the job execution until it completes
 **Output:** JSON with `{ jobExecutionId, status }` (validate) or `{ promotionId, jobExecutionId, status }` (promote)
-**Flow:** Validate = `POST /actions/validate`. Promote = `POST /actions/promote`.
+**Flow:** Validate = mcwebhook `Promotion` → `PromotionDeployment` (dryRun: true). Promote = mcwebhook `Promotion` → `PromotionDeployment` (dryRun: false).
 
 ### `copado-hx deploy`
 **Purpose:** Execute a deployment for a promoted user story.
@@ -82,7 +86,7 @@ Before executing any `copado-hx` command:
 - `--yes` : Skip the human confirmation prompt
 **Output:** JSON with `{ jobExecutionId, status, promotionId }`
 **CRITICAL:** Never use `--yes` flag for PROD deployments. Always let the human confirm.
-**Flow:** `POST /actions/deploy` with the promotion ID.
+**Flow:** mcwebhook action `PromotionDeployment` with the promotion ID.
 
 ### `copado-hx merge-deploy`
 **Purpose:** Promote (Git merge) then deploy in a single step.
@@ -151,7 +155,8 @@ Use this when the developer says: "ship my user story", "promote to prod", "depl
 1. Verify auth: `copado-hx auth status --json`
 2. Set context: `copado-hx story set --id <us-id>`
 3. Ask Build Agent for commit guidance: `copado-hx ai ask --agent build "What metadata should I commit for <us-id>?" --json`
-4. Commit: `copado-hx commit --message "<generated message>" --json`
+4. Commit: `copado-hx commit --message "<generated message>" [--us <us-id>] --json`
+   *(Components are auto-detected from the User Story or selected interactively)*
 5. Validate: `copado-hx promote --validate --us <us-id> --watch --json`
 6. Merge and deploy to UAT: `copado-hx merge-deploy --us <us-id> --env UAT --json`
 7. Run CRT smoke tests: `copado-hx test run --suite <smoke-suite-id> --watch --json`

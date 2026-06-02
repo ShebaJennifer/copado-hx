@@ -136,6 +136,15 @@ class SalesforceClient(BaseClient):
         records = self.query(soql)
         return records[0] if records else None
 
+    def tooling_query(self, soql: str) -> list[dict]:
+        """Execute a Tooling API SOQL query and return the list of records."""
+        import urllib.parse
+        encoded = urllib.parse.quote(soql)
+        result = self.get(f"/tooling/query?q={encoded}")
+        if isinstance(result, dict):
+            return result.get("records", [])
+        return []
+
     def apexrest(self, path: str, method: str = "GET", json_body: Optional[dict] = None) -> Any:
         """Call a Copado Apex REST endpoint (e.g. /services/apexrest/copado/v1/...)."""
         url = f"{self.instance_url}/services/apexrest/{path.lstrip('/')}"

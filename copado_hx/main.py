@@ -80,11 +80,13 @@ app.add_typer(workflow_app, name="workflow", hidden=True)
 def commit_shortcut(
     message: str = typer.Option(..., "--message", "-m", help="Commit message"),
     us: str = typer.Option(None, "--us", help="User story ID"),
+    changes_file: str = typer.Option(None, "--changes", help="JSON file with changes array (auto-detected if omitted)"),
+    watch: bool = typer.Option(True, "--watch/--no-watch", "-w", help="Poll until done (default: on)"),
     json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
 ):
     """Commit metadata changes from the current user story to Git."""
     from copado_hx.commands.pipeline import commit_cmd
-    commit_cmd(message=message, us=us, json_output=json_output)
+    commit_cmd(message=message, us=us, changes_file=changes_file, watch=watch, json_output=json_output)
 
 
 @app.command("promote")
@@ -196,7 +198,7 @@ def _print_help() -> None:
     t1.add_row("story show --id <ID>",             "Show user story details")
     t1.add_row("story set --id <ID>",              "Set working story context")
     t1.add_row("story create --title \"...\"",       "Create a new user story")
-    t1.add_row("commit -m \"msg\" [--us <ID>]",     "Commit metadata changes")
+    t1.add_row("commit -m \"msg\" [--us <ID>]",     "Commit metadata (auto-detect or --changes)")
     t1.add_row("promote --validate [--us <ID>]",    "Validate changes (dry-run)")
     t1.add_row("promote --env <ENV> [--us <ID>]",  "Promote (Git merge only)")
     t1.add_row("deploy --promotion <ID>",           "Deploy a promoted user story")

@@ -4,17 +4,22 @@ Copado CI/CD — API client with isolated read and action paths.
 Architecture
 ────────────
 READS  → Salesforce REST + SOQL  (Bearer <SF_ACCESS_TOKEN>)
-         Objects: copado__User_Story__c, copado__JobExecution__c, copado__Environment__c
+         Objects: copado__User_Story__c, copado__JobExecution__c, copado__Environment__c,
+                  copado__User_Story_Metadata__c
 
-ACTIONS → Copado Actions REST API
-          POST /services/apexrest/copado/v1/actions/validate
-          POST /services/apexrest/copado/v1/actions/promote
-          POST /services/apexrest/copado/v1/actions/deploy
-          POST /services/apexrest/copado/v1/actions/commit
-          GET  /services/apexrest/copado/v1/job-executions/{id}
+ACTIONS → Copado mcwebhook endpoint
+          POST /services/apexrest/copado/mcwebhook
+          Body: { "action": "<ActionName>", "key": "<API_KEY>", "payload": { ... } }
           Headers:
             Authorization: Bearer <SF_ACCESS_TOKEN>
             copado-webhook-key: <COPADO_ACTIONS_KEY>
+
+          Action names:
+            "Commit"              — commit metadata to feature branch
+            "Promotion"           — create promotion record (Git merge)
+            "PromotionDeployment" — trigger deployment (dry-run or real)
+
+JOB STATUS → SOQL on copado__JobExecution__c (not a REST endpoint)
 """
 
 from __future__ import annotations
@@ -660,22 +665,118 @@ def _create_promotion_via_webhook(
     return promo_id
 
 
-def commit(message: str, story_id: str) -> dict:
-    """Commit metadata changes via mcwebhook."""
+def list_story_metadata(story_sf_id: str) -> list[dict]:
+    """Query metadata components linked to a User Story.
+
+    Returns a list of dicts in the Copado CommitChange schema:
+      {"a": "Add", "n": "MyClass", "t": "ApexClass"}
+    """
+    client = _get_read_client()
+    records = client.query(
+        "SELECT copado__Type__c, Name, copado__Action__c "
+        "FROM copado__User_Story_Metadata__c "
+        f"WHERE copado__User_Story__c = '{story_sf_id}'"
+    )
+    return [
+        {
+            "t": r.get("copado__Type__c", ""),
+            "n": r.get("Name", ""),
+            "a": r.get("copado__Action__c", "Add"),
+        }
+        for r in records
+    ]
+
+
+# Metadata types queryable via Tooling API and their entity/field mappings
+_TOOLING_TYPES: dict[str, tuple[str, str]] = {
+    "ApexClass":                  ("ApexClass",      "Name"),
+    "ApexTrigger":                ("ApexTrigger",    "Name"),
+    "LightningComponentBundle":   ("LightningComponentBundle", "DeveloperName"),
+    "AuraDefinitionBundle":       ("AuraDefinitionBundle",     "DeveloperName"),
+    "Flow":                       ("FlowDefinition", "DeveloperName"),
+    "CustomObject":               ("CustomObject",   "DeveloperName"),
+    "CustomLabel":                ("ExternalString", "Name"),
+    "ApexPage":                   ("ApexPage",       "Name"),
+    "ApexComponent":              ("ApexComponent",  "Name"),
+    "StaticResource":             ("StaticResource", "Name"),
+    "PermissionSet":              ("PermissionSet",  "Name"),
+}
+
+
+def list_org_metadata(metadata_type: str) -> list[str]:
+    """Query the org for component names of a given metadata type via Tooling API.
+
+    Returns a sorted list of component names (excluding managed-package items).
+    """
+    mapping = _TOOLING_TYPES.get(metadata_type)
+    if not mapping:
+        return []
+    entity, name_field = mapping
+    client = _get_read_client()
+    try:
+        # ExternalString (CustomLabel) often from managed packages - don't filter by NamespacePrefix
+        # Add date filter to show only recently changed components (last 7 days)
+        if entity == "ExternalString":
+            records = client.tooling_query(
+                f"SELECT {name_field} FROM {entity} "
+                f"WHERE LastModifiedDate = LAST_N_DAYS:7 "
+                f"ORDER BY {name_field} LIMIT 200"
+            )
+        else:
+            records = client.tooling_query(
+                f"SELECT {name_field} FROM {entity} "
+                f"WHERE NamespacePrefix = null "
+                f"ORDER BY {name_field} LIMIT 200"
+            )
+        return [r.get(name_field, "") for r in records if r.get(name_field)]
+    except Exception as exc:
+        log.debug("Tooling query for %s failed: %s", metadata_type, exc)
+        return []
+
+
+def commit(message: str, story_id: str, changes: Optional[list[dict]] = None) -> dict:
+    """Commit metadata changes via mcwebhook action 'Commit'.
+
+    Args:
+        message: Commit message.
+        story_id: User story name (e.g. US-0000024) or SF Id.
+        changes: Optional list of CommitChange dicts. If omitted, auto-detected
+                 from copado__User_Story_Metadata__c.
+
+    Returns:
+        dict with jobExecutionId for polling, commitId, and component count.
+    """
     if _is_mock():
         return mock_data.mock_commit(message, story_id)
 
     sf_id = _resolve_story_sf_id(story_id)
-    result = _post_action("CommitFiles", {
+
+    # Auto-detect components if none provided
+    if not changes:
+        changes = list_story_metadata(sf_id)
+    if not changes:
+        raise CopadoAPIError(
+            400,
+            "No metadata components found for this User Story.\n"
+            "  → Select components in the Copado UI first, or provide --changes <file.json>."
+        )
+
+    result = _post_action("Commit", {
         "userStoryId": sf_id,
+        "changes": changes,
         "message": message,
     })
+
+    # Extract real IDs from response
+    job_exec = result.get("jobExecution", {}) if isinstance(result, dict) else {}
+    us_commit = result.get("userStoryCommit", {}) if isinstance(result, dict) else {}
     return {
-        "status": result.get("status", "Committed"),
-        "commitId": result.get("commitId", sf_id),
+        "status": "Commit Triggered",
+        "jobExecutionId": job_exec.get("Id", "") or _extract_job_id(result),
+        "commitId": us_commit.get("Id", ""),
         "message": message,
-        "filesCommitted": result.get("filesCommitted", []),
         "userStory": story_id,
+        "componentsCount": len(changes),
     }
 
 

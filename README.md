@@ -24,8 +24,8 @@ $ copado-hx story list
   US-0000024 | My first Source Format User Story  | In Progress | Dev1-SFP
 
 $ copado-hx commit --us US-0000024 -m "feat: lead scoring"
-  Commit successful
-  status: Committed  |  environment: Dev1-SFP
+  Auto-detected 3 components: 2 ApexClass, 1 Flow
+  Commit triggered — Job: a1Xhk000002bcDE
 
 $ copado-hx promote --validate --us US-0000024
   Validation triggered — Job: a1Xhk000001abCD
@@ -69,9 +69,9 @@ $ copado-hx env list
 | test | ai | env | guide (interactive workflow)               |
 +-------------------------------------------------------------+
 |               Dual API Strategy                             |
-|   SOQL Reads (stories, envs)  |  Actions REST API (CI/CD)  |
+|   SOQL Reads (stories, envs)  |  mcwebhook Actions (CI/CD) |
 +-------------------------------------------------------------+
-|   Salesforce REST API v62.0   | Copado Actions REST API v1 |
+|   Salesforce REST API v62.0   | Copado mcwebhook endpoint  |
 |    Browser OAuth (Authorization Code Grant)                 |
 +-------------------------------------------------------------+
 |                    Copado Platform                           |
@@ -83,7 +83,7 @@ $ copado-hx env list
 ### Key Design Decisions
 
 - **Browser OAuth** — Authorization code flow works on all orgs (no security token needed)
-- **Copado Actions REST API** — Uses official action endpoints (`/actions/validate`, `/actions/promote`, `/actions/deploy`) with real `jobExecutionId` polling
+- **Copado mcwebhook** — Uses the Copado mcwebhook endpoint with action names (Commit, Promotion, PromotionDeployment) and real `jobExecutionId` polling
 - **SOQL-powered reads** — Real-time data with relationship queries (environment names resolved, not raw IDs)
 - **Python + Typer** — Fastest CLI framework to build, beautiful help text out of the box
 - **Rich** — Professional terminal output (tables, panels, spinners, colors)
@@ -173,13 +173,20 @@ copado-hx story create --title "Feature X" --project <id> --release <id> --env <
 
 ### CI/CD Pipeline Operations
 ```bash
-copado-hx commit --us US-0000024 -m "feat: lead scoring"   # Commit
+copado-hx commit --us US-0000024 -m "feat: lead scoring"   # Commit (auto-detects components)
+copado-hx commit --us US-0000024 -m "msg" --changes f.json # Commit with explicit component list
+copado-hx commit --us US-0000024 -m "msg" --watch          # Commit and poll until done
 copado-hx promote --validate --us US-0000024               # Validate only (dry-run)
 copado-hx promote --us US-0000024 --env INT-SFP            # Promote (Git merge)
 copado-hx deploy --promotion <id> --yes                    # Deploy a promotion
 copado-hx merge-deploy --us US-0000024 --env INT-SFP       # Promote + deploy in one step
 copado-hx status                                           # Pipeline overview
 ```
+
+**Commit Smart Detection:**
+- **Auto-detect** (default): Queries `copado__User_Story_Metadata__c` for components already linked to the story.
+- **Interactive picker** (fallback): If no metadata exists, launches an interactive component selector — queries your org's metadata types via Tooling API and lets you pick components from numbered lists.
+- **`--changes file.json`** (override): Provide an explicit JSON array of `{"a": "Add", "t": "ApexClass", "n": "MyClass"}` entries for scripted/CI use.
 
 ### Environment Management
 ```bash
@@ -228,9 +235,15 @@ Combines CRT test pass rate + failure severity + coverage metrics into a single 
 
 Implements the OAuth 2.0 Authorization Code flow with a paste-URL approach — works on any Salesforce org regardless of IP restrictions, security token requirements, or SOAP API settings.
 
-### Copado Actions REST API Integration
+### Copado mcwebhook Integration
 
-`copado-hx` uses the official Copado Actions REST API (`/actions/validate`, `/actions/promote`, `/actions/deploy`, `/actions/commit`) which returns real `jobExecutionId` values. Each async action is polled via `GET /job-executions/{id}` until completion. This is the correct, supported integration path — no manual record creation or webhook hacks.
+`copado-hx` uses the Copado mcwebhook endpoint (`POST /services/apexrest/copado/mcwebhook`) with action names `Commit`, `Promotion`, and `PromotionDeployment`. Each action returns a `jobExecutionId` which is polled via SOQL until completion. The commit payload includes a `changes[]` array of metadata components auto-detected from `copado__User_Story_Metadata__c` or selected interactively.
+
+### Smart Polling & UX
+
+- **Ctrl+C exits the polling view** without cancelling the server-side job — run other commands while it continues.
+- **Compact test output** — `test status` and `test results` show clean summary panels instead of raw JSON dumps.
+- **AI-powered failure triage** — truncated error messages with actionable summaries.
 
 ---
 
@@ -291,11 +304,11 @@ Place `SKILL.md` in `.cursor/rules/` or reference it in your system prompt. The 
 | **Story List** | SOQL Query | `SELECT ... FROM copado__User_Story__c` with relationship fields |
 | **Story Detail** | SOQL Query | Environment name resolved via `copado__Environment__r.Name` |
 | **Environment List** | SOQL Query | `SELECT ... FROM copado__Environment__c` |
-| **Commit** | Actions REST API | `POST /actions/commit` |
-| **Validate** | Actions REST API | `POST /actions/validate` — dry-run, no merge |
-| **Promote** | Actions REST API | `POST /actions/promote` — Git merge only |
-| **Deploy** | Actions REST API | `POST /actions/deploy` — actual deployment |
-| **Job Status** | Actions REST API | `GET /job-executions/{id}` — poll until done |
+| **Commit** | mcwebhook | action: `Commit` — auto-detect or interactive component selection |
+| **Validate** | mcwebhook | action: `Promotion` → `PromotionDeployment` (dryRun: true) |
+| **Promote** | mcwebhook | action: `Promotion` → `PromotionDeployment` (dryRun: false) |
+| **Deploy** | mcwebhook | action: `PromotionDeployment` on existing promotion |
+| **Job Status** | SOQL | `SELECT ... FROM copado__JobExecution__c` — poll until done |
 | **Create Story** | Salesforce REST | `POST /sobjects/copado__User_Story__c` |
 | **CRT Tests** | CRT Open API | `/pace/v4/projects/.../jobs`, `/builds`, `/results` |
 | **AI Agents** | Dialogue API | `/dialogues`, `/messages` |
@@ -335,7 +348,7 @@ copado-hx/
 │   │   └── ai.py            # ai ask / chat / triage
 │   ├── api/
 │   │   ├── base.py          # Shared HTTP client + SalesforceClient
-│   │   ├── cicd.py          # Copado CI/CD — SOQL reads + Actions REST API
+│   │   ├── cicd.py          # Copado CI/CD — SOQL reads + mcwebhook actions
 │   │   ├── crt.py           # CRT Open API client
 │   │   ├── ai_platform.py   # Copado AI Dialogue API client
 │   │   └── mock_data.py     # Realistic mock responses for all APIs

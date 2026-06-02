@@ -14,7 +14,7 @@ from __future__ import annotations
 from typing import Optional
 
 import typer
-from rich.prompt import Confirm
+from rich.prompt import Confirm, Prompt
 
 from copado_hx.api import cicd
 from copado_hx.utils.config import get_settings
@@ -30,7 +30,7 @@ from copado_hx.utils.output import (
     console,
     make_table,
 )
-from copado_hx.utils.polling import poll_until_done
+from copado_hx.utils.polling import poll_until_done, SUCCESS_STATUSES, FAILURE_STATUSES
 
 pipeline_app = typer.Typer(help="CI/CD pipeline operations: commit, promote, deploy, status.")
 
@@ -47,35 +47,257 @@ def _require_story() -> str:
 
 
 # ---------------------------------------------------------------------------
-# Commit
+# Commit — interactive metadata picker
+# ---------------------------------------------------------------------------
+
+_COMMON_TYPES = [
+    "ApexClass",
+    "ApexTrigger",
+    "LightningComponentBundle",
+    "AuraDefinitionBundle",
+    "Flow",
+    "CustomObject",
+    "CustomLabel",
+    "ApexPage",
+    "ApexComponent",
+    "StaticResource",
+    "PermissionSet",
+]
+
+
+def _interactive_metadata_picker() -> list[dict]:
+    """Interactive component selector — query org metadata and let user pick."""
+    from rich.table import Table
+    from rich import box
+
+    selected: list[dict] = []
+
+    print_warning("No metadata found on this User Story. Let's select components to commit.")
+    console.print()
+
+    while True:
+        # ── Step 1: pick metadata type ──
+        table = Table(title="Metadata Types", box=box.SIMPLE, show_lines=False)
+        table.add_column("#", style="bold cyan", width=4)
+        table.add_column("Type")
+        for i, t in enumerate(_COMMON_TYPES, 1):
+            table.add_row(str(i), t)
+        console.print(table)
+        console.print("[dim]Or type a custom metadata type name.[/dim]")
+
+        type_input = Prompt.ask(
+            "[bold]Select type[/bold]",
+            default="",
+        ).strip()
+        if not type_input:
+            break
+
+        # Resolve to type name
+        try:
+            idx = int(type_input) - 1
+            if 0 <= idx < len(_COMMON_TYPES):
+                meta_type = _COMMON_TYPES[idx]
+            else:
+                print_error(f"Invalid selection: {type_input}")
+                continue
+        except ValueError:
+            meta_type = type_input  # custom type name
+
+        # ── Step 2: query org for components of this type ──
+        console.print(f"[dim]Querying org for {meta_type} components...[/dim]")
+        components = cicd.list_org_metadata(meta_type)
+
+        if components:
+            comp_table = Table(title=f"{meta_type} ({len(components)} found)", box=box.SIMPLE)
+            comp_table.add_column("#", style="bold cyan", width=4)
+            comp_table.add_column("Name")
+            for i, name in enumerate(components, 1):
+                comp_table.add_row(str(i), name)
+            console.print(comp_table)
+
+            pick = Prompt.ask(
+                "[bold]Select components (comma-separated, e.g. 1,3,5)[/bold]",
+                default="",
+            ).strip()
+            if pick:
+                for p in pick.split(","):
+                    p = p.strip()
+                    try:
+                        ci = int(p) - 1
+                        if 0 <= ci < len(components):
+                            entry = {"a": "Add", "t": meta_type, "n": components[ci]}
+                            if entry not in selected:
+                                selected.append(entry)
+                                console.print(f"  [green]✓[/green] {meta_type}/{components[ci]}")
+                    except ValueError:
+                        pass
+        else:
+            # Tooling API didn't return results — let user type names manually
+            console.print(f"[yellow]Could not query {meta_type} from org. Enter names manually.[/yellow]")
+            names_input = Prompt.ask(
+                f"[bold]Component names (comma-separated)[/bold]",
+                default="",
+            ).strip()
+            if names_input:
+                for n in names_input.split(","):
+                    n = n.strip()
+                    if n:
+                        entry = {"a": "Add", "t": meta_type, "n": n}
+                        if entry not in selected:
+                            selected.append(entry)
+                            console.print(f"  [green]✓[/green] {meta_type}/{n}")
+
+        console.print()
+        if selected:
+            # Show current selections
+            console.print(f"[bold]Selected ({len(selected)}):[/bold]")
+            for i, s in enumerate(selected, 1):
+                console.print(f"  {i}. {s['t']}/{s['n']}")
+
+            # Allow removal
+            remove_input = Prompt.ask(
+                "[bold]Remove any? (enter #, or press Enter to skip)[/bold]",
+                default="",
+            ).strip()
+            if remove_input:
+                for r in remove_input.split(","):
+                    r = r.strip()
+                    try:
+                        ri = int(r) - 1
+                        if 0 <= ri < len(selected):
+                            removed = selected.pop(ri)
+                            console.print(f"  [red]✗[/red] Removed {removed['t']}/{removed['n']}")
+                    except ValueError:
+                        pass
+
+            if not Confirm.ask("[bold]Add more components?[/bold]", default=False):
+                break
+        else:
+            console.print("[dim]No components selected yet. Try again.[/dim]")
+
+    # ── Summary ──
+    while selected:
+        console.print()
+        summary = Table(title="Components to Commit", box=box.ROUNDED)
+        summary.add_column("#", style="dim", width=4)
+        summary.add_column("Type", style="cyan")
+        summary.add_column("Name", style="bold")
+        summary.add_column("Action")
+        for i, s in enumerate(selected, 1):
+            summary.add_row(str(i), s["t"], s["n"], s["a"])
+        console.print(summary)
+        console.print()
+
+        action = Prompt.ask(
+            "[bold]Proceed (p), remove entry (r), or cancel (c)?[/bold]",
+            default="p",
+        ).strip().lower()
+
+        if action == "p":
+            break
+        elif action == "c":
+            return []
+        elif action == "r":
+            rm = Prompt.ask("[bold]Enter # to remove[/bold]", default="").strip()
+            for r in rm.split(","):
+                r = r.strip()
+                try:
+                    ri = int(r) - 1
+                    if 0 <= ri < len(selected):
+                        removed = selected.pop(ri)
+                        console.print(f"  [red]✗[/red] Removed {removed['t']}/{removed['n']}")
+                except ValueError:
+                    pass
+
+    return selected
+
+
+# ---------------------------------------------------------------------------
+# Commit command
 # ---------------------------------------------------------------------------
 
 @pipeline_app.command("commit")
 def commit_cmd(
     message: str = typer.Option(..., "--message", "-m", help="Commit message"),
     us: Optional[str] = typer.Option(None, "--us", help="User story ID (defaults to current context)"),
+    changes_file: Optional[str] = typer.Option(None, "--changes", help="JSON file with changes array (auto-detected if omitted)"),
+    watch: bool = typer.Option(True, "--watch/--no-watch", "-w", help="Poll until completion (default: on)"),
     json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
 ):
     """Commit metadata changes from the current user story to Git."""
     story_id = us or _require_story()
+
+    # Load changes from file if provided
+    changes = None
+    if changes_file:
+        import json
+        try:
+            with open(changes_file) as f:
+                changes = json.load(f)
+            print_info(f"Loaded {len(changes)} components from [bold]{changes_file}[/bold]")
+        except Exception as exc:
+            print_error(f"Failed to load changes file: {exc}")
+            raise typer.Exit(1)
+    else:
+        # Auto-detect: show what we found
+        if not get_settings().mock_mode:
+            try:
+                sf_id = cicd._resolve_story_sf_id(story_id)
+                changes = cicd.list_story_metadata(sf_id)
+                if changes:
+                    types_summary = {}
+                    for c in changes:
+                        t = c.get("t", "Unknown")
+                        types_summary[t] = types_summary.get(t, 0) + 1
+                    parts = [f"{v} {k}" for k, v in types_summary.items()]
+                    print_info(f"Auto-detected {len(changes)} components: {', '.join(parts)}")
+                else:
+                    # No existing metadata — launch interactive picker
+                    changes = _interactive_metadata_picker()
+                    if not changes:
+                        print_info("No components selected. Commit cancelled.")
+                        raise typer.Exit(0)
+            except typer.Exit:
+                raise
+            except Exception:
+                pass  # Let cicd.commit() handle the error
+
     print_info(f"Committing for [bold]{story_id}[/bold]: {message}")
 
     try:
-        result = cicd.commit(message=message, story_id=story_id)
+        result = cicd.commit(message=message, story_id=story_id, changes=changes)
         status = result.get("status", "Unknown")
+        job_id = result.get("jobExecutionId", "")
 
-        if "Error" in status or "Failed" in status:
-            print_error(f"Commit failed: {result.get('logs', status)}")
-            smart_output(result, json_mode=json_output, title="Commit Failed")
-            raise typer.Exit(1)
+        print_success(f"Commit triggered — Job: [bold]{job_id}[/bold]")
+        smart_output(result, json_mode=json_output, title="Commit Triggered")
+        record_action("commit", last_story=story_id, last_job_id=job_id)
 
-        print_success(f"Commit successful — {result.get('commitId', 'N/A')}")
-        files = result.get("filesCommitted", [])
-        if files and not json_output:
-            print_info(f"Files committed: {', '.join(files)}")
+        if watch and job_id:
+            print_info("Polling for completion... (Ctrl+C to exit this view)")
+            final = poll_until_done(
+                fetch_fn=lambda: cicd.get_job_status(job_id),
+                status_key="status",
+                watch=True,
+                label=f"Committing {story_id}",
+            )
+            # If user exited the polling view, don't process further
+            if not final or final.get("_poll_interrupted"):
+                return
 
-        smart_output(result, json_mode=json_output, title="Commit Result")
-        record_action("commit", last_story=story_id)
+            final_status = final.get("status", "")
+            if final_status in FAILURE_STATUSES:
+                print_error(f"Commit failed: {final.get('error', final_status)}")
+                smart_output(final, json_mode=json_output, title="Commit Failed")
+                raise typer.Exit(1)
+            elif final_status not in SUCCESS_STATUSES:
+                print_warning(f"Commit ended with status: {final_status}")
+                smart_output(final, json_mode=json_output, title="Commit Result")
+                return
+
+            print_success("Commit succeeded!")
+            smart_output(final, json_mode=json_output, title="Commit Result")
+
         if not json_output:
             print_suggestions(after_action="commit")
     except typer.Exit:

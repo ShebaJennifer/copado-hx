@@ -39,8 +39,8 @@ copado-hx story show
 # Ask the Build Agent what metadata to commit
 copado-hx ai ask --agent build "What metadata should I commit for US-1234?"
 
-# Commit with a meaningful message
-copado-hx commit -m "feat: lead scoring logic"
+# Commit — auto-detects components from the User Story, or pick interactively
+copado-hx commit --us US-0000024 -m "feat: lead scoring logic"
 
 # Validate before deploying
 copado-hx promote --validate --us US-1234 --watch
@@ -49,7 +49,7 @@ copado-hx promote --validate --us US-1234 --watch
 copado-hx merge-deploy --us US-1234 --env UAT
 ```
 
-**Talking point:** "The AI agent tells me exactly what to commit. I commit, validate, then merge-and-deploy — all from the terminal. The validation runs through the Copado Actions API and polls until complete. Merge-and-deploy does a Git merge then actual deployment, each with live status polling."
+**Talking point:** "The AI agent tells me exactly what to commit. The commit command auto-detects metadata components from the User Story — or if none exist yet, launches an interactive picker that queries the org's metadata via Tooling API. I commit, validate, then merge-and-deploy — all from the terminal. Every action goes through the Copado mcwebhook and polls until complete."
 
 ---
 
@@ -84,7 +84,7 @@ copado-hx ai triage --execution <exec-id>
 copado-hx merge-deploy --us US-1234 --env PROD
 ```
 
-**Talking point:** "Merge-and-deploy runs promote (Git merge) then deploy, each step polling the Copado Actions API until completion. copado-hx stops and shows clear errors if any step fails. No accidental deploys."
+**Talking point:** "Merge-and-deploy runs promote (Git merge) then deploy, each step polling the Copado mcwebhook until completion. copado-hx stops and shows clear errors if any step fails. No accidental deploys."
 
 ```bash
 # Generate release notes
@@ -141,5 +141,5 @@ copado-hx test results --execution <exec-id> --json
 | Output formats | Human + JSON |
 | Innovation features | Deployment Confidence Score, AI Triage |
 | Track coverage | A (CLI) + B (SKILL.md) |
-| Lines of code | ~1,500 |
+| Lines of code | ~2,000+ |
 | Setup time | < 2 minutes |
