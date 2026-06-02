@@ -97,12 +97,20 @@ def mock_promote(story_id: str, env: str, validate_only: bool = False) -> dict:
     }
 
 
-def mock_deploy(env: str) -> dict:
+def mock_validate(story_id: str) -> dict:
     return {
-        "deploymentId": _rand_id("dep-"),
-        "status": "In Progress",
-        "targetEnvironment": env,
+        "status": "Validation Triggered",
         "jobExecutionId": _rand_id("job-"),
+        "userStory": story_id,
+        "timestamp": _ts(),
+    }
+
+
+def mock_deploy(promotion_id: str) -> dict:
+    return {
+        "status": "Deployment Triggered",
+        "jobExecutionId": _rand_id("job-"),
+        "promotionId": promotion_id,
         "timestamp": _ts(),
     }
 
@@ -125,6 +133,25 @@ MOCK_ENVIRONMENTS = [
     {"id": "env-sit-001", "name": "SIT", "type": "Integration", "org_id": "00D5g000007YYYY"},
     {"id": "env-uat-001", "name": "UAT", "type": "Staging", "org_id": "00D5g000007ZZZZ"},
     {"id": "env-prod-001", "name": "PROD", "type": "Production", "org_id": "00D5g000007WWWW"},
+]
+
+
+MOCK_PROJECTS = [
+    {"id": "proj-phoenix-qa", "name": "Phoenix QA"},
+    {"id": "proj-phoenix-prod", "name": "Phoenix Production"},
+]
+
+
+MOCK_RELEASES = [
+    {"id": "rel-sprint-1", "name": "Sprint 1", "project_id": "proj-phoenix-qa"},
+    {"id": "rel-sprint-2", "name": "Sprint 2", "project_id": "proj-phoenix-qa"},
+    {"id": "rel-v1.0", "name": "Version 1.0", "project_id": "proj-phoenix-prod"},
+]
+
+
+MOCK_CREDENTIALS = [
+    {"id": "cred-sf-dev", "name": "Salesforce Dev"},
+    {"id": "cred-sf-prod", "name": "Salesforce Production"},
 ]
 
 
@@ -218,6 +245,35 @@ MOCK_AI_RESPONSES = {
     "**Monitoring:** Set up a report to track score distribution for first 2 weeks.\n\n"
     "**Rollback trigger:** If >10% of leads show score = 0 after 48 hours, investigate.",
 }
+
+
+def mock_merge_and_deploy(promotion_id: str) -> dict:
+    return {
+        "status": "Merge and Deploy Triggered",
+        "promotionId": promotion_id,
+        "jobExecutionId": _rand_id("job-"),
+        "timestamp": _ts(),
+    }
+
+
+def mock_create_user_story(title: str) -> dict:
+    return {
+        "id": _rand_id("a1B5g000"),
+        "name": f"US-{random.randint(10000, 99999)}",
+        "title": title,
+        "status": "Draft",
+        "project_id": "proj-phoenix-qa",
+        "project": "Phoenix QA",
+        "release_id": "",
+        "release": "",
+        "environment_id": "",
+        "environment": "",
+        "credential_id": "",
+        "credential": "",
+        "record_type_id": "0125g000000XXXX",
+        "record_type": "User Story",
+        "_mock": True,  # Clearly labeled as mock
+    }
 
 
 def mock_ai_dialogue(agent: str) -> dict:

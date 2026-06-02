@@ -312,7 +312,10 @@ def _add_if_missing(opts: list[dict], keyword: str, option: dict) -> None:
 # ── Deploy (CI/CD) flow ──────────────────────────────────────────────────
 
 def _deploy_flow():
-    """Deploy flow — generic 5-option menu with prompts."""
+    """Deploy flow — simplified guided sequence: Commit → Validate → Merge and Deploy."""
+    from copado_hx.api import cicd
+    from copado_hx.utils.polling import poll_until_done, SUCCESS_STATUSES, FAILURE_STATUSES
+
     while True:
         settings = get_settings()
         state = load_state()
@@ -321,10 +324,8 @@ def _deploy_flow():
 
         opts = [
             {"label": "Commit changes", "cmd": "__commit__"},
-            {"label": "Validate promotion (dry run)", "cmd": "__validate__"},
-            {"label": "Promote to environment", "cmd": "__promote__"},
-            {"label": "Deploy to environment", "cmd": "__deploy__"},
-            {"label": "Check pipeline status", "cmd": "copado-hx status --watch"},
+            {"label": "Validate changes", "cmd": "__validate__"},
+            {"label": "Merge and Deploy", "cmd": "__merge_deploy__"},
         ]
 
         choice = _flow_menu("Deploy (CI/CD)", opts)
@@ -342,20 +343,179 @@ def _deploy_flow():
 
         elif selected["cmd"] == "__validate__":
             sid = Prompt.ask("[bold]Story ID[/bold]", default=default_story) if default_story else Prompt.ask("[bold]Story ID[/bold]")
-            env = Prompt.ask("[bold]Target environment[/bold]", default=default_env)
-            _run_selected(f"copado-hx promote --us {sid} --env {env} --validate")
 
-        elif selected["cmd"] == "__promote__":
+            console.print()
+            print_info(f"Validating [bold]{sid}[/bold]...")
+            console.print()
+
+            try:
+                result = cicd.validate(story_id=sid)
+                job_id = result.get("jobExecutionId", "")
+                validated_promo_id = result.get("promotionId", "")
+
+                print_success(f"Validation triggered — Job: [bold]{job_id}[/bold]")
+                from copado_hx.utils.output import smart_output
+                smart_output(result, json_mode=False, title="Validation Triggered")
+                record_action("validate", last_story=sid, last_job_id=job_id,
+                              last_promotion_id=validated_promo_id)
+
+                if job_id:
+                    console.print()
+                    print_info("Waiting for validation to complete... (Ctrl+C to exit this view)")
+                    final = poll_until_done(
+                        fetch_fn=lambda: cicd.get_job_status(job_id),
+                        status_key="status",
+                        watch=True,
+                        label=f"Validating {sid}",
+                    )
+                    # User exited polling view — skip result processing
+                    if not final or final.get("_poll_interrupted"):
+                        continue
+
+                    smart_output(final, json_mode=False, title="Validation Result")
+
+                    final_status = final.get("status", "")
+                    if final_status in SUCCESS_STATUSES:
+                        print_success("Validation succeeded!")
+                        console.print()
+                        proceed = Prompt.ask(
+                            "[bold]Proceed to Merge and Deploy?[/bold] (y/n)",
+                            default="y",
+                        )
+                        if proceed.lower() in ("y", "yes"):
+                            _do_merge_and_deploy(sid, default_env, promotion_id=validated_promo_id)
+                    elif final_status in FAILURE_STATUSES:
+                        print_error(f"Validation failed: {final.get('error', final_status)}")
+                    else:
+                        print_warning(f"Validation ended with status: {final_status}")
+
+            except (SystemExit, KeyboardInterrupt):
+                pass
+            except Exception as e:
+                print_error(f"Validation failed: {e}")
+
+        elif selected["cmd"] == "__merge_deploy__":
             sid = Prompt.ask("[bold]Story ID[/bold]", default=default_story) if default_story else Prompt.ask("[bold]Story ID[/bold]")
             env = Prompt.ask("[bold]Target environment[/bold]", default=default_env)
-            _run_selected(f"copado-hx promote --us {sid} --env {env}")
-
-        elif selected["cmd"] == "__deploy__":
-            env = Prompt.ask("[bold]Target environment[/bold]", default=default_env)
-            _run_selected(f"copado-hx deploy --env {env} --yes")
+            if sid and env:
+                # Reuse promotion from prior validation if available
+                last_promo = state.get("last_promotion_id", "")
+                if last_promo:
+                    print_info(f"Reusing validated promotion [bold]{last_promo}[/bold]")
+                _do_merge_and_deploy(sid, env, promotion_id=last_promo)
+            else:
+                print_warning("Story ID and target environment are required.")
 
         else:
             _run_selected(selected["cmd"])
+
+
+def _do_merge_and_deploy(story_id: str, environment: str, promotion_id: str = ""):
+    """Execute merge & deploy with polling.
+
+    If promotion_id is provided (e.g. from a prior validation), skip creating
+    a new Promotion and go straight to deploying the existing one.
+    Otherwise, create a new Promotion via promote() first.
+    """
+    from copado_hx.api import cicd
+    from copado_hx.utils.polling import poll_until_done, SUCCESS_STATUSES, FAILURE_STATUSES
+    from copado_hx.utils.output import smart_output
+
+    promo_id = promotion_id
+
+    if promo_id:
+        # ── Reuse existing Promotion from validation ─────────────────
+        console.print()
+        print_info(f"Deploying validated promotion [bold]{promo_id}[/bold] → [bold]{environment}[/bold]...")
+        console.print()
+    else:
+        # ── Step 1: Promote (create new Promotion + Git merge) ───────
+        console.print()
+        print_info(f"Promoting [bold]{story_id}[/bold] → [bold]{environment}[/bold] (Git merge)...")
+        console.print()
+
+        try:
+            promo_result = cicd.promote(story_id=story_id, environment=environment)
+            promo_job_id = promo_result.get("jobExecutionId", "")
+            promo_id = promo_result.get("promotionId", "")
+
+            print_success(f"Promote triggered — Job: [bold]{promo_job_id}[/bold]")
+            smart_output(promo_result, json_mode=False, title="Promote Triggered")
+            record_action("promote", last_story=story_id, last_env=environment,
+                          last_job_id=promo_job_id, last_promotion_id=promo_id)
+
+            if promo_job_id:
+                console.print()
+                print_info("Waiting for promote (Git merge) to complete...")
+                promo_final = poll_until_done(
+                    fetch_fn=lambda: cicd.get_job_status(promo_job_id),
+                    status_key="status",
+                    watch=True,
+                    label=f"Promoting {story_id} → {environment}",
+                )
+                smart_output(promo_final, json_mode=False, title="Promote Result")
+
+                promo_status = promo_final.get("status", "")
+                if promo_status in FAILURE_STATUSES:
+                    print_error(f"Promote failed: {promo_final.get('error', promo_status)}")
+                    return
+                elif promo_status not in SUCCESS_STATUSES:
+                    print_warning(f"Promote ended with status: {promo_status}")
+                    return
+
+                print_success("Promote (Git merge) succeeded!")
+            else:
+                print_warning("No job execution ID returned from promote.")
+                return
+
+        except SystemExit:
+            return
+        except Exception as e:
+            print_error(f"Promote failed: {e}")
+            return
+
+    # ── Step 2: Deploy ───────────────────────────────────────────────────
+    if not promo_id:
+        print_warning("No promotion ID returned. Cannot proceed to deploy.")
+        return
+
+    console.print()
+    print_info(f"Deploying promotion [bold]{promo_id}[/bold]...")
+    console.print()
+
+    try:
+        deploy_result = cicd.deploy(promotion_id=promo_id)
+        deploy_job_id = deploy_result.get("jobExecutionId", "")
+
+        print_success(f"Deploy triggered — Job: [bold]{deploy_job_id}[/bold]")
+        smart_output(deploy_result, json_mode=False, title="Deploy Triggered")
+        record_action("deploy", last_job_id=deploy_job_id)
+
+        if deploy_job_id:
+            console.print()
+            print_info("Waiting for deployment to complete...")
+            deploy_final = poll_until_done(
+                fetch_fn=lambda: cicd.get_job_status(deploy_job_id),
+                status_key="status",
+                watch=True,
+                label=f"Deploying to {environment}",
+            )
+            smart_output(deploy_final, json_mode=False, title="Deploy Result")
+
+            deploy_status = deploy_final.get("status", "")
+            if deploy_status in SUCCESS_STATUSES:
+                print_success("Merge and Deploy completed successfully!")
+            elif deploy_status in FAILURE_STATUSES:
+                print_error(f"Deploy failed: {deploy_final.get('error', deploy_status)}")
+            else:
+                print_warning(f"Deploy ended with status: {deploy_status}")
+        else:
+            print_warning("No job execution ID returned from deploy.")
+
+    except SystemExit:
+        pass
+    except Exception as e:
+        print_error(f"Deploy failed: {e}")
 
 
 # ── Testing flow ─────────────────────────────────────────────────────────
@@ -415,23 +575,60 @@ def _testing_flow():
                 continue
             console.print()
             try:
-                sno = IntPrompt.ask(
-                    f"[bold]Enter job # to run (1–{len(cached_jobs)})[/bold]",
-                    choices=[str(i) for i in range(1, len(cached_jobs) + 1)],
-                )
+                sno = IntPrompt.ask(f"[bold]Enter job # to run (1–{len(cached_jobs)})[/bold]")
             except (KeyboardInterrupt, EOFError):
+                continue
+            if sno < 1 or sno > len(cached_jobs):
+                print_warning(f"Invalid choice. Pick 1–{len(cached_jobs)}.")
                 continue
             picked = cached_jobs[sno - 1]
             job_id = picked.get("jobId", "")
-            _run_selected(f"copado-hx test run --job {job_id}")
+
+            # Trigger the test run directly with polling
+            console.print()
+            print_info(f"Running test job [bold]{job_id}[/bold]...")
+            console.print()
+            try:
+                run_result = crt.run_test(job_id=job_id)
+                exec_id = run_result.get("executionId") or (run_result.get("data", {}).get("executionId")) or ""
+                print_success(f"Test execution started — Execution: [bold]{exec_id}[/bold]")
+                record_action("test_run", last_execution_id=str(exec_id), last_crt_job_id=str(job_id))
+
+                if exec_id:
+                    from copado_hx.utils.polling import poll_until_done, SUCCESS_STATUSES, FAILURE_STATUSES
+                    console.print()
+                    print_info("Waiting for test to complete... (Ctrl+C to exit this view)")
+                    final = poll_until_done(
+                        fetch_fn=lambda: crt.get_test_status(exec_id, job_id=job_id),
+                        status_key="status",
+                        watch=True,
+                        label=f"Test {job_id}",
+                    )
+                    # User exited polling view — skip result processing
+                    if not final or final.get("_poll_interrupted"):
+                        continue
+
+                    from copado_hx.utils.output import smart_output
+                    smart_output(final, json_mode=False, title="Test Execution Result")
+
+                    final_status = final.get("status", "")
+                    if final_status in SUCCESS_STATUSES:
+                        print_success(f"Tests completed — {final_status}")
+                    elif final_status in FAILURE_STATUSES:
+                        print_error(f"Tests finished with failures — {final_status}")
+                else:
+                    print_warning("No execution ID returned.")
+            except KeyboardInterrupt:
+                continue  # User exited — job keeps running
+            except Exception as e:
+                print_error(f"Test run failed: {e}")
+                continue
 
             # Post-run sub-menu
-            state = load_state()
-            last_exec = state.get("last_execution_id", "")
+            last_exec = exec_id or ""
             has_ai = get_token("ai") is not None
 
             if not last_exec:
-                print_warning("No execution ID returned — cannot view results.")
                 continue
 
             while True:
@@ -441,7 +638,7 @@ def _testing_flow():
                 if has_ai:
                     post_opts.append({"label": "Debug results with AI", "cmd": f"copado-hx ai triage --execution {last_exec} --job {job_id}"})
 
-                post_choice = _flow_menu("Test job triggered! What next?", post_opts)
+                post_choice = _flow_menu("What next?", post_opts)
                 if post_choice == 0:
                     break
                 if post_choice < 0 or post_choice > len(post_opts):
@@ -542,11 +739,11 @@ def _story_flow():
                 continue
             console.print()
             try:
-                sno = IntPrompt.ask(
-                    f"[bold]Enter story # (1–{len(cached_stories)})[/bold]",
-                    choices=[str(i) for i in range(1, len(cached_stories) + 1)],
-                )
+                sno = IntPrompt.ask(f"[bold]Enter story # (1–{len(cached_stories)})[/bold]")
             except (KeyboardInterrupt, EOFError):
+                continue
+            if sno < 1 or sno > len(cached_stories):
+                print_warning(f"Invalid choice. Pick 1–{len(cached_stories)}.")
                 continue
             picked = cached_stories[sno - 1]
             sid = picked.get("name", "")
@@ -555,18 +752,14 @@ def _story_flow():
             _run_selected(f"copado-hx story show --id {sid}")
             # Bridge to Deploy
             console.print()
-            proceed = Prompt.ask("[bold]Proceed to Deploy?[/bold] (y/n)", default="n")
+            proceed = Prompt.ask("[bold]Proceed to deployment steps?[/bold] (y/n)", default="n")
             if proceed.lower() in ("y", "yes"):
                 _deploy_flow()
             continue
 
-        # Create — prompt for title
+        # Create — launch interactive mode (handles all pickers internally)
         if "story create" in selected["cmd"]:
-            title_val = Prompt.ask("[bold]Story title[/bold]")
-            pipeline_val = Prompt.ask("[bold]Pipeline ID[/bold] (blank for default)", default="")
-            selected["cmd"] = f'copado-hx story create --title "{title_val}"'
-            if pipeline_val:
-                selected["cmd"] += f" --pipeline {pipeline_val}"
+            selected["cmd"] = "copado-hx story create"
 
         _run_selected(selected["cmd"])
 
@@ -653,9 +846,16 @@ def _execute_cmd(cmd: str) -> None:
 
         elif parts[0] == "story" and parts[1] == "create":
             from copado_hx.commands.story import create_story
-            title = _extract_quoted(cmd) or "New Story"
-            pipeline = _extract_opt(parts, "--pipeline")
-            create_story(title=title, pipeline=pipeline, json_output=False)
+            title = _extract_quoted(cmd) or None
+            create_story(
+                title=title,
+                project=None,
+                release=None,
+                credential=None,
+                environment=None,
+                status=None,
+                json_output=False,
+            )
 
         elif parts[0] == "commit":
             from copado_hx.commands.pipeline import commit_cmd
@@ -668,13 +868,19 @@ def _execute_cmd(cmd: str) -> None:
             us = _extract_opt(parts, "--us")
             env = _extract_opt(parts, "--env")
             validate = "--validate" in parts
-            promote_cmd(env=env or "", us=us, validate=validate, watch=False, json_output=False)
+            promote_cmd(env=env or "", us=us, validate=validate, watch=True, json_output=False)
 
         elif parts[0] == "deploy":
             from copado_hx.commands.pipeline import deploy_cmd
-            env = _extract_opt(parts, "--env")
+            promo = _extract_opt(parts, "--promotion") or _extract_opt(parts, "-p")
             yes = "--yes" in parts
-            deploy_cmd(env=env or "", watch=False, yes=yes, json_output=False)
+            deploy_cmd(promotion=promo or "", watch=True, yes=yes, json_output=False)
+
+        elif parts[0] == "merge-deploy":
+            from copado_hx.commands.pipeline import merge_deploy_cmd
+            us = _extract_opt(parts, "--us")
+            env = _extract_opt(parts, "--env")
+            merge_deploy_cmd(us=us, env=env or "", json_output=False)
 
         elif parts[0] == "test" and parts[1] == "list":
             from copado_hx.commands.test import list_tests
@@ -684,7 +890,7 @@ def _execute_cmd(cmd: str) -> None:
             from copado_hx.commands.test import run_test
             job = _extract_opt(parts, "--job")
             suite = _extract_opt(parts, "--suite")
-            run_test(suite=suite, job=job, project=None, watch=False, json_output=False)
+            run_test(suite=suite, job=job, project=None, watch=True, json_output=False)
 
         elif parts[0] == "test" and parts[1] == "results":
             from copado_hx.commands.test import test_results
@@ -784,16 +990,15 @@ def story_pick():
     console.print()
 
     try:
-        choice = IntPrompt.ask(
-            "[bold]Select a story (0 to cancel)[/bold]",
-            choices=[str(i) for i in range(len(stories) + 1)],
-            default=0,
-        )
+        choice = IntPrompt.ask(f"[bold]Select a story (1–{len(stories)}, 0 to cancel)[/bold]", default=0)
     except (KeyboardInterrupt, EOFError):
         return
 
     if choice == 0:
         print_info("Cancelled.")
+        return
+    if choice < 0 or choice > len(stories):
+        print_warning(f"Invalid choice. Pick 1–{len(stories)}.")
         return
 
     selected = stories[choice - 1]

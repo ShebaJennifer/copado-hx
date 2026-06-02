@@ -222,10 +222,11 @@ def triage(
                 "ai_analysis": response.get("content", ""),
             }, json_mode=True)
         else:
-            # Show failures
+            # Show failures (truncated for readability)
+            from copado_hx.commands.test import _truncate_error
             print_panel(
                 f"Test Failures — {execution}",
-                "\n".join(f"[red]\u2718 {f.get('testName', '?')}[/red]: {f.get('error', '')}" for f in failures),
+                "\n".join(f"[red]\u2718 {f.get('testName', '?')}[/red]: {_truncate_error(f.get('error', ''))}" for f in failures),
                 style="red",
             )
             console.print()

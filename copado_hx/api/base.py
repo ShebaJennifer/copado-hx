@@ -27,6 +27,14 @@ class CopadoAPIError(Exception):
         super().__init__(f"[{status_code}] {message}")
 
 
+class AuthExpiredError(Exception):
+    """Raised when auth token is expired or invalid (401/403)."""
+
+    def __init__(self, message: str = "Authentication token expired or invalid"):
+        self.message = message
+        super().__init__(message)
+
+
 class BaseClient:
     """Thin wrapper around httpx for Copado API calls."""
 
@@ -41,6 +49,12 @@ class BaseClient:
     def _handle_response(self, resp: httpx.Response) -> Any:
         """Parse response or raise a clear error."""
         if resp.status_code >= 400:
+            # Detect auth errors (401/403) and raise specific exception
+            if resp.status_code == 401 or resp.status_code == 403:
+                raise AuthExpiredError(
+                    "Authentication token expired or invalid. "
+                    "Run 'copado-hx auth refresh-sf' to refresh Salesforce token."
+                )
             try:
                 body = resp.json()
                 msg = body.get("message") or body.get("error") or str(body)

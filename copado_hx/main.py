@@ -89,27 +89,38 @@ def commit_shortcut(
 
 @app.command("promote")
 def promote_shortcut(
-    env: str = typer.Option(..., "--env", "-e", help="Target environment"),
+    env: str = typer.Option("", "--env", "-e", help="Target environment"),
     us: str = typer.Option(None, "--us", help="User story ID"),
-    validate: bool = typer.Option(False, "--validate", help="Validation-only deployment"),
+    validate: bool = typer.Option(False, "--validate", help="Validate only (no merge, no deploy)"),
     watch: bool = typer.Option(False, "--watch", "-w", help="Poll until done"),
     json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
 ):
-    """Promote a user story to the next environment."""
+    """Promote or validate a user story."""
     from copado_hx.commands.pipeline import promote_cmd
     promote_cmd(env=env, us=us, validate=validate, watch=watch, json_output=json_output)
 
 
 @app.command("deploy")
 def deploy_shortcut(
-    env: str = typer.Option(..., "--env", "-e", help="Target environment"),
+    promotion: str = typer.Option(..., "--promotion", "-p", help="Promotion ID to deploy"),
     watch: bool = typer.Option(False, "--watch", "-w", help="Poll until done"),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation"),
     json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
 ):
-    """Execute a deployment to the target environment."""
+    """Execute a deployment for a promoted user story."""
     from copado_hx.commands.pipeline import deploy_cmd
-    deploy_cmd(env=env, watch=watch, yes=yes, json_output=json_output)
+    deploy_cmd(promotion=promotion, watch=watch, yes=yes, json_output=json_output)
+
+
+@app.command("merge-deploy")
+def merge_deploy_shortcut(
+    us: str = typer.Option(None, "--us", help="User story ID"),
+    env: str = typer.Option(..., "--env", "-e", help="Target environment"),
+    json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
+):
+    """Merge and deploy — promotes then deploys to the target environment."""
+    from copado_hx.commands.pipeline import merge_deploy_cmd
+    merge_deploy_cmd(us=us, env=env, json_output=json_output)
 
 
 @app.command("status")
@@ -186,8 +197,10 @@ def _print_help() -> None:
     t1.add_row("story set --id <ID>",              "Set working story context")
     t1.add_row("story create --title \"...\"",       "Create a new user story")
     t1.add_row("commit -m \"msg\" [--us <ID>]",     "Commit metadata changes")
-    t1.add_row("promote --env <ENV> [--validate]", "Promote to an environment")
-    t1.add_row("deploy --env <ENV> [--yes]",       "Deploy to an environment")
+    t1.add_row("promote --validate [--us <ID>]",    "Validate changes (dry-run)")
+    t1.add_row("promote --env <ENV> [--us <ID>]",  "Promote (Git merge only)")
+    t1.add_row("deploy --promotion <ID>",           "Deploy a promoted user story")
+    t1.add_row("merge-deploy --env <ENV>",          "Promote + deploy in one step")
     t1.add_row("status [--job <ID>] [--watch]",    "Pipeline / job status")
     t1.add_row("env list",                         "List pipeline environments")
     console.print(t1)

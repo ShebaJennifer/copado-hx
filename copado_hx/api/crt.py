@@ -108,7 +108,11 @@ def get_test_status(
     job_id: str = "",
     project_id: Optional[str] = None,
 ) -> dict:
-    """Poll the status of a running test execution."""
+    """Poll the status of a running test execution.
+
+    Normalizes the CRT response so ``status`` is always a top-level key
+    with a value the polling utility can recognise.
+    """
     if _is_mock():
         return mock_data.mock_test_status(execution_id)
 
@@ -116,7 +120,15 @@ def get_test_status(
     pid = project_id or _project_id()
     oid = _org_id()
     params = {"orgId": oid} if oid else None
-    return client.get(f"/pace/v4/projects/{pid}/jobs/{job_id}/builds/{execution_id}", params=params)
+    response = client.get(f"/pace/v4/projects/{pid}/jobs/{job_id}/builds/{execution_id}", params=params)
+
+    # Normalise: lift data.status to top-level so poll_until_done can read it
+    if isinstance(response, dict):
+        data = response.get("data") or {}
+        raw_status = data.get("status", "") if isinstance(data, dict) else ""
+        if raw_status and "status" not in response:
+            response["status"] = raw_status
+    return response
 
 
 def get_test_results(

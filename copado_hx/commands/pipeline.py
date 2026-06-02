@@ -91,45 +91,78 @@ def commit_cmd(
 
 @pipeline_app.command("promote")
 def promote_cmd(
-    env: str = typer.Option(..., "--env", "-e", help="Target environment (e.g. UAT, SIT, PROD)"),
+    env: str = typer.Option("", "--env", "-e", help="Target environment (e.g. UAT, SIT, PROD)"),
     us: Optional[str] = typer.Option(None, "--us", help="User story ID (defaults to current context)"),
-    validate: bool = typer.Option(False, "--validate", help="Run validation-only deployment (no actual deploy)"),
-    watch: bool = typer.Option(False, "--watch", "-w", help="Poll until promotion completes"),
+    validate: bool = typer.Option(False, "--validate", help="Run validation only (no merge, no deploy)"),
+    watch: bool = typer.Option(False, "--watch", "-w", help="Poll until completion"),
     json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
 ):
-    """Promote a user story to the next environment in the pipeline."""
+    """Promote or validate a user story."""
     story_id = us or _require_story()
-    action = "Validating" if validate else "Promoting"
-    print_info(f"{action} [bold]{story_id}[/bold] to [bold]{env}[/bold]...")
 
-    try:
-        result = cicd.promote(
-            story_id=story_id,
-            environment=env,
-            validate_only=validate,
-        )
-        job_id = result.get("jobExecutionId", "")
-        print_success(f"Promotion triggered — Job: [bold]{job_id}[/bold]")
-        smart_output(result, json_mode=json_output, title="Promotion Triggered")
-        record_action("promote", last_story=story_id, last_env=env, last_job_id=job_id)
-        if not json_output:
-            print_suggestions(after_action="promote")
+    if validate:
+        # Validate — always auto-poll (validation is meaningless without result)
+        print_info(f"Validating [bold]{story_id}[/bold]...")
+        try:
+            result = cicd.validate(story_id=story_id)
+            job_id = result.get("jobExecutionId", "")
+            print_success(f"Validation triggered — Job: [bold]{job_id}[/bold]")
+            smart_output(result, json_mode=json_output, title="Validation Triggered")
+            record_action("validate", last_story=story_id, last_job_id=job_id,
+                          last_promotion_id=result.get("promotionId", ""))
+            if not json_output:
+                print_suggestions(after_action="validate")
 
-        if watch and job_id:
-            print_info("Polling for completion...")
-            final = poll_until_done(
-                fetch_fn=lambda: cicd.get_job_status(job_id),
-                status_key="status",
-                watch=True,
-                label=f"{action} {story_id} → {env}",
-            )
-            smart_output(final, json_mode=json_output, title="Promotion Result")
+            if job_id:
+                print_info("Waiting for validation to complete... (Ctrl+C to exit this view)")
+                final = poll_until_done(
+                    fetch_fn=lambda: cicd.get_job_status(job_id),
+                    status_key="status",
+                    watch=True,
+                    label=f"Validating {story_id}",
+                )
+                smart_output(final, json_mode=json_output, title="Validation Result")
+                from copado_hx.utils.polling import SUCCESS_STATUSES, FAILURE_STATUSES
+                final_status = final.get("status", "")
+                if final_status in SUCCESS_STATUSES:
+                    print_success("Validation succeeded!")
+                elif final_status in FAILURE_STATUSES:
+                    print_error(f"Validation failed: {final.get('error', final_status)}")
+        except typer.Exit:
+            raise
+        except Exception as e:
+            print_error(f"Validation failed: {e}")
+            raise typer.Exit(1)
+    else:
+        # Promote (Git merge) — POST /actions/promote
+        if not env:
+            print_error("Target environment required for promote. Use --env <ENV>.")
+            raise typer.Exit(1)
+        print_info(f"Promoting [bold]{story_id}[/bold] → [bold]{env}[/bold]...")
+        try:
+            result = cicd.promote(story_id=story_id, environment=env)
+            job_id = result.get("jobExecutionId", "")
+            print_success(f"Promote triggered — Job: [bold]{job_id}[/bold]")
+            smart_output(result, json_mode=json_output, title="Promote Triggered")
+            record_action("promote", last_story=story_id, last_env=env, last_job_id=job_id,
+                          last_promotion_id=result.get("promotionId", ""))
+            if not json_output:
+                print_suggestions(after_action="promote")
 
-    except typer.Exit:
-        raise
-    except Exception as e:
-        print_error(f"Promotion failed: {e}")
-        raise typer.Exit(1)
+            if watch and job_id:
+                print_info("Polling for completion...")
+                final = poll_until_done(
+                    fetch_fn=lambda: cicd.get_job_status(job_id),
+                    status_key="status",
+                    watch=True,
+                    label=f"Promoting {story_id} → {env}",
+                )
+                smart_output(final, json_mode=json_output, title="Promote Result")
+        except typer.Exit:
+            raise
+        except Exception as e:
+            print_error(f"Promote failed: {e}")
+            raise typer.Exit(1)
 
 
 # ---------------------------------------------------------------------------
@@ -138,29 +171,27 @@ def promote_cmd(
 
 @pipeline_app.command("deploy")
 def deploy_cmd(
-    env: str = typer.Option(..., "--env", "-e", help="Target environment (e.g. PROD)"),
+    promotion: str = typer.Option(..., "--promotion", "-p", help="Promotion ID to deploy"),
     watch: bool = typer.Option(False, "--watch", "-w", help="Poll until deployment completes"),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt"),
     json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
 ):
-    """Execute a deployment to the target environment (requires confirmation for PROD)."""
-    # Safety gate: always confirm PROD deployments
-    is_prod = env.upper() in ("PROD", "PRODUCTION")
-    if is_prod and not yes:
-        print_warning(f"You are about to deploy to [bold red]{env}[/bold red].")
+    """Execute a deployment for a promoted user story."""
+    if not yes:
+        print_warning(f"You are about to deploy promotion [bold]{promotion}[/bold].")
         confirmed = Confirm.ask("Are you sure you want to proceed?")
         if not confirmed:
             print_info("Deployment cancelled.")
             raise typer.Exit(0)
 
-    print_info(f"Deploying to [bold]{env}[/bold]...")
+    print_info(f"Deploying promotion [bold]{promotion}[/bold]...")
 
     try:
-        result = cicd.deploy(environment=env)
+        result = cicd.deploy(promotion_id=promotion)
         job_id = result.get("jobExecutionId", "")
-        print_success(f"Deployment triggered — Job: [bold]{job_id}[/bold]")
-        smart_output(result, json_mode=json_output, title="Deployment Triggered")
-        record_action("deploy", last_env=env, last_job_id=job_id)
+        print_success(f"Deploy triggered — Job: [bold]{job_id}[/bold]")
+        smart_output(result, json_mode=json_output, title="Deploy Triggered")
+        record_action("deploy", last_job_id=job_id)
         if not json_output:
             print_suggestions(after_action="deploy")
 
@@ -170,14 +201,82 @@ def deploy_cmd(
                 fetch_fn=lambda: cicd.get_job_status(job_id),
                 status_key="status",
                 watch=True,
-                label=f"Deploying to {env}",
+                label=f"Deploying {promotion}",
             )
-            smart_output(final, json_mode=json_output, title="Deployment Result")
+            smart_output(final, json_mode=json_output, title="Deploy Result")
 
     except typer.Exit:
         raise
     except Exception as e:
         print_error(f"Deployment failed: {e}")
+        raise typer.Exit(1)
+
+
+# ---------------------------------------------------------------------------
+# Merge and Deploy
+# ---------------------------------------------------------------------------
+
+@pipeline_app.command("merge-deploy")
+def merge_deploy_cmd(
+    us: Optional[str] = typer.Option(None, "--us", help="User story ID (defaults to current context)"),
+    env: str = typer.Option(..., "--env", "-e", help="Target environment"),
+    json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
+):
+    """Merge and deploy — promotes (Git merge) then deploys to the target environment."""
+    story_id = us or _require_story()
+    print_info(f"Merge and Deploy: [bold]{story_id}[/bold] → [bold]{env}[/bold]")
+
+    try:
+        # Step 1: Promote (Git merge)
+        print_info("Step 1/2: Promoting (Git merge)...")
+        promo_result = cicd.promote(story_id=story_id, environment=env)
+        promo_job_id = promo_result.get("jobExecutionId", "")
+        promo_id = promo_result.get("promotionId", "")
+        print_success(f"Promote triggered — Job: [bold]{promo_job_id}[/bold]")
+        smart_output(promo_result, json_mode=json_output, title="Promote Triggered")
+
+        if promo_job_id:
+            promo_final = poll_until_done(
+                fetch_fn=lambda: cicd.get_job_status(promo_job_id),
+                status_key="status",
+                watch=True,
+                label=f"Promoting {story_id} → {env}",
+            )
+            smart_output(promo_final, json_mode=json_output, title="Promote Result")
+            from copado_hx.utils.polling import SUCCESS_STATUSES, FAILURE_STATUSES
+            if promo_final.get("status", "") in FAILURE_STATUSES:
+                print_error(f"Promote failed: {promo_final.get('error', promo_final.get('status'))}")
+                raise typer.Exit(1)
+
+        # Step 2: Deploy
+        if not promo_id:
+            print_error("No promotion ID returned from promote step.")
+            raise typer.Exit(1)
+
+        print_info("Step 2/2: Deploying...")
+        deploy_result = cicd.deploy(promotion_id=promo_id)
+        deploy_job_id = deploy_result.get("jobExecutionId", "")
+        print_success(f"Deploy triggered — Job: [bold]{deploy_job_id}[/bold]")
+        smart_output(deploy_result, json_mode=json_output, title="Deploy Triggered")
+
+        if deploy_job_id:
+            deploy_final = poll_until_done(
+                fetch_fn=lambda: cicd.get_job_status(deploy_job_id),
+                status_key="status",
+                watch=True,
+                label=f"Deploying to {env}",
+            )
+            smart_output(deploy_final, json_mode=json_output, title="Deploy Result")
+
+        record_action("merge_deploy", last_story=story_id, last_env=env,
+                      last_promotion_id=promo_id, last_job_id=deploy_job_id)
+        if not json_output:
+            print_suggestions(after_action="merge_deploy")
+
+    except typer.Exit:
+        raise
+    except Exception as e:
+        print_error(f"Merge and Deploy failed: {e}")
         raise typer.Exit(1)
 
 
@@ -196,7 +295,7 @@ def status_cmd(
         # Poll a specific job
         try:
             if watch:
-                print_info(f"Watching job [bold]{job}[/bold]... (Ctrl+C to stop)")
+                print_info(f"Watching job [bold]{job}[/bold]... (Ctrl+C to exit this view)")
                 result = poll_until_done(
                     fetch_fn=lambda: cicd.get_job_status(job),
                     status_key="status",

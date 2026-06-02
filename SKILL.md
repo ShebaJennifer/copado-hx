@@ -65,25 +65,38 @@ Before executing any `copado-hx` command:
 **Do not use if:** No user story context is set. Run `copado-hx story set` first.
 
 ### `copado-hx promote`
-**Purpose:** Promote a user story to the next environment in the pipeline.
+**Purpose:** Promote (Git merge) or validate a user story.
 **Syntax:** `copado-hx promote --env <ENV> [--us <US-ID>] [--validate] [--watch] --json`
 **Flags:**
-- `--validate` : Run a validation-only deployment (no actual deploy)
-- `--env <name>` : Target environment (e.g., UAT, SIT, PROD)
-- `--watch` : Poll until the promotion job completes
-**Output:** JSON with `{ promotionId, status, jobExecutionId }`
-**Poll for completion:** Use `copado-hx status --job <jobExecutionId> --watch`
+- `--validate` : Run validation only (dry-run, no merge, no deploy). When set, `--env` is NOT required.
+- `--env <name>` : Target environment (required for promote, not for validate)
+- `--watch` : Poll the job execution until it completes
+**Output:** JSON with `{ jobExecutionId, status }` (validate) or `{ promotionId, jobExecutionId, status }` (promote)
+**Flow:** Validate = `POST /actions/validate`. Promote = `POST /actions/promote`.
 
 ### `copado-hx deploy`
-**Purpose:** Execute a deployment to the target environment.
-**Syntax:** `copado-hx deploy --env <ENV> [--watch] [--yes] --json`
+**Purpose:** Execute a deployment for a promoted user story.
+**Syntax:** `copado-hx deploy --promotion <ID> [--watch] [--yes] --json`
 **Flags:**
-- `--yes` : Skip the human confirmation prompt (use ONLY for non-production environments)
-**Output:** JSON with `{ deploymentId, status, jobExecutionId }`
+- `--promotion` : The promotion ID to deploy (returned from `promote`)
+- `--yes` : Skip the human confirmation prompt
+**Output:** JSON with `{ jobExecutionId, status, promotionId }`
 **CRITICAL:** Never use `--yes` flag for PROD deployments. Always let the human confirm.
+**Flow:** `POST /actions/deploy` with the promotion ID.
+
+### `copado-hx merge-deploy`
+**Purpose:** Promote (Git merge) then deploy in a single step.
+**Syntax:** `copado-hx merge-deploy --env <ENV> [--us <US-ID>] --json`
+**Output:** Runs promote → poll → deploy → poll. JSON output for each step.
+**Use when:** The developer wants to promote and deploy in one go.
+
+### `copado-hx story create`
+**Purpose:** Create a new user story.
+**Syntax:** `copado-hx story create --title "<title>" [--project <ID>] [--env <ID>] --json`
+**Output:** JSON with `{ id, name, title, status }`
 
 ### `copado-hx status`
-**Purpose:** Show pipeline status including promotions, deployments, quality gates.
+**Purpose:** Show pipeline status including job execution details.
 **Syntax:** `copado-hx status [--job <jobExecutionId>] [--watch] --json`
 **Output:** JSON with current pipeline state or specific job status.
 
@@ -139,13 +152,14 @@ Use this when the developer says: "ship my user story", "promote to prod", "depl
 2. Set context: `copado-hx story set --id <us-id>`
 3. Ask Build Agent for commit guidance: `copado-hx ai ask --agent build "What metadata should I commit for <us-id>?" --json`
 4. Commit: `copado-hx commit --message "<generated message>" --json`
-5. Promote + validate to UAT: `copado-hx promote --env UAT --validate --watch --json`
-6. Run CRT smoke tests: `copado-hx test run --suite <smoke-suite-id> --watch --json`
+5. Validate: `copado-hx promote --validate --us <us-id> --watch --json`
+6. Merge and deploy to UAT: `copado-hx merge-deploy --us <us-id> --env UAT --json`
+7. Run CRT smoke tests: `copado-hx test run --suite <smoke-suite-id> --watch --json`
    *(Retrieve suite ID from `copado-hx test list --json` first)*
-7. Check test results: `copado-hx test results --execution <id> --json`
-8. **STOP. Ask the human:** "Tests passed/failed. Here are the results: [summary]. Shall I proceed to deploy to PROD?"
-9. Only on **explicit human approval**: `copado-hx deploy --env PROD --watch --json`
-10. Generate release notes: `copado-hx ai ask --agent release "Generate release notes for <us-id>" --json`
+8. Check test results: `copado-hx test results --execution <id> --json`
+9. **STOP. Ask the human:** "Tests passed/failed. Here are the results: [summary]. Shall I proceed to deploy to PROD?"
+10. Only on **explicit human approval**: `copado-hx merge-deploy --us <us-id> --env PROD --json`
+11. Generate release notes: `copado-hx ai ask --agent release "Generate release notes for <us-id>" --json`
 
 ### Playbook: Investigate a Failed Deployment
 

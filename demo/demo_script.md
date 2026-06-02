@@ -42,11 +42,14 @@ copado-hx ai ask --agent build "What metadata should I commit for US-1234?"
 # Commit with a meaningful message
 copado-hx commit -m "feat: lead scoring logic"
 
-# Promote to UAT with validation
-copado-hx promote --env UAT --validate --watch
+# Validate before deploying
+copado-hx promote --validate --us US-1234 --watch
+
+# Merge and deploy to UAT (promote + deploy in one step)
+copado-hx merge-deploy --us US-1234 --env UAT
 ```
 
-**Talking point:** "The AI agent tells me exactly what to commit. I commit, promote, and validate — all from the terminal. The `--watch` flag gives me a live spinner so I know exactly when it's done."
+**Talking point:** "The AI agent tells me exactly what to commit. I commit, validate, then merge-and-deploy — all from the terminal. The validation runs through the Copado Actions API and polls until complete. Merge-and-deploy does a Git merge then actual deployment, each with live status polling."
 
 ---
 
@@ -77,11 +80,11 @@ copado-hx ai triage --execution <exec-id>
 ## Act 4 — Deploy to Production (30 seconds)
 
 ```bash
-# Deploy to PROD — note the safety confirmation prompt
-copado-hx deploy --env PROD
+# Merge and deploy to PROD — note the safety confirmation prompt
+copado-hx merge-deploy --us US-1234 --env PROD
 ```
 
-**Talking point:** "copado-hx has a built-in safety gate. It asks for explicit confirmation before deploying to production. No accidental deploys."
+**Talking point:** "Merge-and-deploy runs promote (Git merge) then deploy, each step polling the Copado Actions API until completion. copado-hx stops and shows clear errors if any step fails. No accidental deploys."
 
 ```bash
 # Generate release notes
@@ -133,7 +136,7 @@ copado-hx test results --execution <exec-id> --json
 | Metric | Value |
 |---|---|
 | Copado API surfaces covered | All 3 (CI/CD, CRT, AI) |
-| CLI commands | 15+ |
+| CLI commands | 18+ |
 | AI agents integrated | All 5 (plan, build, test, release, operate) |
 | Output formats | Human + JSON |
 | Innovation features | Deployment Confidence Score, AI Triage |

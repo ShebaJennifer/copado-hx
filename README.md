@@ -27,9 +27,13 @@ $ copado-hx commit --us US-0000024 -m "feat: lead scoring"
   Commit successful
   status: Committed  |  environment: Dev1-SFP
 
-$ copado-hx promote --us US-0000024 --env INT-SFP
-  Promotion triggered
-  source: Dev1-SFP  |  destination: INT-SFP
+$ copado-hx promote --validate --us US-0000024
+  Validation triggered — Job: a1Xhk000001abCD
+
+$ copado-hx merge-deploy --us US-0000024 --env INT-SFP
+  Step 1/2: Promoting (Git merge)... ✓
+  Step 2/2: Deploying... ✓
+  Merge and Deploy completed successfully!
 
 $ copado-hx env list
   name           | platform | type
@@ -48,7 +52,7 @@ $ copado-hx env list
 | Before (Browser-based) | After (copado-hx) |
 |---|---|
 | Open Copado UI, navigate to user story, click commit | `copado-hx commit -m "feat: lead scoring"` |
-| Switch tabs, find pipeline, click promote, wait | `copado-hx promote --env INT-SFP` |
+| Switch tabs, validate, promote, deploy — 3 separate steps | `copado-hx merge-deploy --env INT-SFP` |
 | Open CRT, find suite, click run, wait, download results | `copado-hx test run --job <id> --watch` |
 | Switch to AI chat, ask question, copy response | `copado-hx ai ask --agent build "Review my Apex"` |
 
@@ -61,12 +65,13 @@ $ copado-hx env list
 ```
 +-------------------------------------------------------------+
 |                      copado-hx CLI                          |
-|  auth | story | commit | promote | deploy | test | ai | env |
+| auth | story | commit | promote | deploy | merge-deploy |   |
+| test | ai | env | guide (interactive workflow)               |
 +-------------------------------------------------------------+
 |               Dual API Strategy                             |
-|   SOQL Reads (stories, envs)  |  REST DML (promote, deploy)|
+|   SOQL Reads (stories, envs)  |  Actions REST API (CI/CD)  |
 +-------------------------------------------------------------+
-|               Salesforce REST API v62.0                     |
+|   Salesforce REST API v62.0   | Copado Actions REST API v1 |
 |    Browser OAuth (Authorization Code Grant)                 |
 +-------------------------------------------------------------+
 |                    Copado Platform                           |
@@ -78,7 +83,7 @@ $ copado-hx env list
 ### Key Design Decisions
 
 - **Browser OAuth** — Authorization code flow works on all orgs (no security token needed)
-- **Direct REST API** — Creates Copado records directly via Salesforce REST, bypassing webhook limitations
+- **Copado Actions REST API** — Uses official action endpoints (`/actions/validate`, `/actions/promote`, `/actions/deploy`) with real `jobExecutionId` polling
 - **SOQL-powered reads** — Real-time data with relationship queries (environment names resolved, not raw IDs)
 - **Python + Typer** — Fastest CLI framework to build, beautiful help text out of the box
 - **Rich** — Professional terminal output (tables, panels, spinners, colors)
@@ -156,14 +161,23 @@ copado-hx story list                    # List user stories (real SOQL)
 copado-hx story list --status "Draft"   # Filter by status
 copado-hx story show --id US-0000024    # Detailed view
 copado-hx story set --id US-0000024     # Set working context
+copado-hx story create                  # Interactive mode with auto-discovery pickers
+copado-hx story create --title "Feature X" --project <id> --release <id> --env <id>  # Scripting mode
 ```
+
+**Story Create Dual Mode:**
+- **Interactive mode** (default when flags missing): Launches numbered pickers for auto-discovery of projects, releases, credentials, and environments from Salesforce. No need to memorize IDs.
+- **Scripting mode** (when flags provided): Create without prompts for automation and AI agents.
+- **Project is effectively required** for pipeline usability (strongly prompted in interactive mode, optional in scripting mode).
+- **Release is scoped to project** to ensure consistency.
 
 ### CI/CD Pipeline Operations
 ```bash
 copado-hx commit --us US-0000024 -m "feat: lead scoring"   # Commit
-copado-hx promote --us US-0000024 --env INT-SFP            # Promote
-copado-hx promote --us US-0000024 --env INT-SFP --validate # Validate only
-copado-hx deploy --env INT-SFP --yes                       # Deploy
+copado-hx promote --validate --us US-0000024               # Validate only (dry-run)
+copado-hx promote --us US-0000024 --env INT-SFP            # Promote (Git merge)
+copado-hx deploy --promotion <id> --yes                    # Deploy a promotion
+copado-hx merge-deploy --us US-0000024 --env INT-SFP       # Promote + deploy in one step
 copado-hx status                                           # Pipeline overview
 ```
 
@@ -214,9 +228,9 @@ Combines CRT test pass rate + failure severity + coverage metrics into a single 
 
 Implements the OAuth 2.0 Authorization Code flow with a paste-URL approach — works on any Salesforce org regardless of IP restrictions, security token requirements, or SOAP API settings.
 
-### Direct REST API Integration
+### Copado Actions REST API Integration
 
-Instead of relying on webhook endpoints, `copado-hx` creates Copado records (Promotions, Promoted User Stories) directly via the Salesforce REST API — making it compatible with any Copado edition and configuration.
+`copado-hx` uses the official Copado Actions REST API (`/actions/validate`, `/actions/promote`, `/actions/deploy`, `/actions/commit`) which returns real `jobExecutionId` values. Each async action is polled via `GET /job-executions/{id}` until completion. This is the correct, supported integration path — no manual record creation or webhook hacks.
 
 ---
 
@@ -234,20 +248,20 @@ copado-hx story list
 # 3. Commit changes
 copado-hx commit --us US-0000024 -m "feat: lead scoring"
 
-# 4. Promote to integration
-copado-hx promote --us US-0000024 --env INT-SFP
+# 4. Validate before deploying
+copado-hx promote --validate --us US-0000024 --watch
 
-# 5. Run tests
+# 5. Merge and deploy to integration (promote + deploy in one step)
+copado-hx merge-deploy --us US-0000024 --env INT-SFP
+
+# 6. Run tests
 copado-hx test run --job 120649 --watch
 
-# 6. Check confidence score
+# 7. Check confidence score
 copado-hx test results --execution <id>
 
-# 7. Deploy to UAT
-copado-hx promote --us US-0000024 --env UAT-SFP
-
-# 8. Deploy to production (with safety confirmation)
-copado-hx deploy --env Production-SFP
+# 8. Merge and deploy to UAT
+copado-hx merge-deploy --us US-0000024 --env UAT-SFP
 ```
 
 ---
@@ -277,9 +291,12 @@ Place `SKILL.md` in `.cursor/rules/` or reference it in your system prompt. The 
 | **Story List** | SOQL Query | `SELECT ... FROM copado__User_Story__c` with relationship fields |
 | **Story Detail** | SOQL Query | Environment name resolved via `copado__Environment__r.Name` |
 | **Environment List** | SOQL Query | `SELECT ... FROM copado__Environment__c` |
-| **Commit** | REST DML | Updates user story record via `PATCH` |
-| **Promote** | REST DML | Creates `copado__Promotion__c` + `copado__Promoted_User_Story__c` |
-| **Deploy** | REST DML | Updates promotion status to trigger deployment |
+| **Commit** | Actions REST API | `POST /actions/commit` |
+| **Validate** | Actions REST API | `POST /actions/validate` — dry-run, no merge |
+| **Promote** | Actions REST API | `POST /actions/promote` — Git merge only |
+| **Deploy** | Actions REST API | `POST /actions/deploy` — actual deployment |
+| **Job Status** | Actions REST API | `GET /job-executions/{id}` — poll until done |
+| **Create Story** | Salesforce REST | `POST /sobjects/copado__User_Story__c` |
 | **CRT Tests** | CRT Open API | `/pace/v4/projects/.../jobs`, `/builds`, `/results` |
 | **AI Agents** | Dialogue API | `/dialogues`, `/messages` |
 | **Auth** | OAuth 2.0 | Authorization Code flow (browser-based) |
@@ -312,13 +329,13 @@ copado-hx/
 │   ├── commands/
 │   │   ├── auth.py          # auth login / status / logout
 │   │   ├── story.py         # story list / show / set / create
-│   │   ├── pipeline.py      # commit / promote / deploy / status
+│   │   ├── pipeline.py      # commit / promote / validate / deploy / merge-deploy / status
 │   │   ├── env.py           # env list
 │   │   ├── test.py          # test list / run / status / results
 │   │   └── ai.py            # ai ask / chat / triage
 │   ├── api/
 │   │   ├── base.py          # Shared HTTP client + SalesforceClient
-│   │   ├── cicd.py          # Copado CI/CD — SOQL reads + REST DML actions
+│   │   ├── cicd.py          # Copado CI/CD — SOQL reads + Actions REST API
 │   │   ├── crt.py           # CRT Open API client
 │   │   ├── ai_platform.py   # Copado AI Dialogue API client
 │   │   └── mock_data.py     # Realistic mock responses for all APIs

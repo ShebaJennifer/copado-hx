@@ -37,6 +37,26 @@ from copado_hx.utils.polling import poll_until_done, SUCCESS_STATUSES, FAILURE_S
 
 test_app = typer.Typer(help="Copado Robotic Testing (CRT) — run tests, check results.")
 
+import re as _re
+
+def _truncate_error(msg: str, max_len: int = 150) -> str:
+    """Extract the key error from a verbose CRT/Chrome error message.
+
+    Strips stacktraces and caps the result at *max_len* characters so that
+    terminal output stays compact and scannable.
+    """
+    if not msg:
+        return "(no error message)"
+    # Cut everything from "Stacktrace:" onward
+    msg = _re.split(r"\n?Stacktrace:", msg, maxsplit=1)[0]
+    # Cut everything from "\n#0" (chrome stacktrace lines)
+    msg = _re.split(r"\n\s*#0 ", msg, maxsplit=1)[0]
+    # Collapse whitespace / newlines into single spaces
+    msg = " ".join(msg.split())
+    if len(msg) > max_len:
+        msg = msg[:max_len].rstrip() + "…"
+    return msg
+
 
 # ---------------------------------------------------------------------------
 # List
@@ -91,20 +111,35 @@ def run_test(
             print_suggestions(after_action="test_run")
 
         if watch and exec_id:
-            print_info("Polling for completion... (Ctrl+C to stop)")
+            print_info("Waiting for test to complete... (Ctrl+C to exit this view)")
             final = poll_until_done(
                 fetch_fn=lambda: crt.get_test_status(exec_id, job_id=job_id, project_id=project),
                 status_key="status",
                 watch=True,
                 label=f"Test {job_id}",
             )
+            # If user exited the polling view, don't process further
+            if not final or final.get("_poll_interrupted"):
+                return
             final_status = final.get("status", "Unknown")
             if final_status in SUCCESS_STATUSES:
                 print_success(f"Tests completed — {final_status}")
             elif final_status in FAILURE_STATUSES:
                 print_error(f"Tests finished with failures — {final_status}")
-            smart_output(final, json_mode=json_output, title="Test Execution Result")
+            if json_output:
+                smart_output(final, json_mode=True, title="Test Execution Result")
+            else:
+                # Show compact summary instead of raw CRT dump
+                data = final.get("data", {}) if isinstance(final, dict) else {}
+                duration = data.get("duration", "N/A")
+                report_url = data.get("logReportUrl", "")
+                lines = [f"[bold]Status:[/bold] {final_status}", f"[bold]Duration:[/bold] {duration}s"]
+                if report_url:
+                    lines.append(f"[bold]Report:[/bold] {report_url}")
+                print_panel("Test Execution Result", "\n".join(lines), style="red" if final_status in FAILURE_STATUSES else "green")
 
+    except KeyboardInterrupt:
+        return  # User exited — job keeps running
     except typer.Exit:
         raise
     except Exception as e:
@@ -127,7 +162,7 @@ def test_status(
     """Poll the status of a running test execution."""
     try:
         if watch:
-            print_info(f"Watching execution [bold]{execution}[/bold]... (Ctrl+C to stop)")
+            print_info(f"Watching execution [bold]{execution}[/bold]... (Ctrl+C to exit this view)")
             result = poll_until_done(
                 fetch_fn=lambda: crt.get_test_status(execution, job_id=job_id, project_id=project),
                 status_key="status",
@@ -137,7 +172,42 @@ def test_status(
         else:
             result = crt.get_test_status(execution, job_id=job_id, project_id=project)
 
-        smart_output(result, json_mode=json_output, title=f"Test Status — {execution}")
+        if json_output:
+            smart_output(result, json_mode=True, title=f"Test Status — {execution}")
+        else:
+            # Compact human-readable summary instead of raw CRT dump
+            if not result or result.get("_poll_interrupted"):
+                return
+            data = result.get("data", {}) if isinstance(result, dict) else {}
+            status = data.get("status", result.get("status", "Unknown"))
+            duration = data.get("duration", "N/A")
+            report_url = data.get("logReportUrl", "")
+
+            # Extract pass/fail counts from xunit totals
+            totals = {}
+            xunit = data.get("xunitReport")
+            if isinstance(xunit, dict):
+                totals = xunit.get("testsuite", {}).get("total", {})
+            tests_total = totals.get("tests", "?")
+            passes = totals.get("passes", "?")
+            failures = totals.get("failures", "?")
+
+            lines = [
+                f"[bold]Status:[/bold]   {status}",
+                f"[bold]Duration:[/bold] {duration}s",
+                f"[bold]Tests:[/bold]    {tests_total} ({passes} passed, {failures} failed)",
+            ]
+            if report_url:
+                lines.append(f"[bold]Report:[/bold]   {report_url}")
+            if str(failures) not in ("0", "?"):
+                lines.append("")
+                lines.append(f"[dim]Run[/dim] copado-hx test results -e {execution} -j {job_id} [dim]for failure details.[/dim]")
+
+            style = "red" if status in ("failed", "Failed") else "green"
+            print_panel(f"Test Status — {execution}", "\n".join(lines), style=style)
+
+    except KeyboardInterrupt:
+        return  # User exited — job keeps running
     except Exception as e:
         print_error(f"Failed to get test status: {e}")
         raise typer.Exit(1)
@@ -201,7 +271,7 @@ def test_results(
             for f in failures:
                 console.print(f"  [red]\u2718[/red] [bold]{f.get('testName', 'Unknown')}[/bold]")
                 console.print(f"    Class: {f.get('class', 'N/A')}")
-                console.print(f"    Error: {f.get('error', 'N/A')}")
+                console.print(f"    Error: {_truncate_error(f.get('error', 'N/A'))}")
 
         # Deployment Confidence Score — QA Intelligence WOW feature
         console.print()

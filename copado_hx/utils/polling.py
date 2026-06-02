@@ -7,7 +7,7 @@ you trigger them, get back a job/execution ID, and poll until done.
 This module provides a reusable poller with:
   - configurable interval and timeout
   - a Rich spinner for human-friendly output
-  - clean exit on Ctrl+C
+  - Ctrl+C exits the polling view (job keeps running on the server)
 """
 
 from __future__ import annotations
@@ -23,13 +23,14 @@ from rich.text import Text
 console = Console()
 
 # Statuses that mean "still going"
-IN_PROGRESS_STATUSES = {"In Progress", "Queued", "Running", "Pending", "InProgress"}
+IN_PROGRESS_STATUSES = {"In Progress", "Queued", "Running", "Pending", "InProgress",
+                        "executing", "running", "queued", "pending"}
 
 # Statuses that mean "done successfully"
-SUCCESS_STATUSES = {"Completed Successfully", "Succeeded", "Success", "Completed"}
+SUCCESS_STATUSES = {"Completed Successfully", "Succeeded", "Success", "Completed", "Successful"}
 
 # Statuses that mean "done but failed"
-FAILURE_STATUSES = {"Failed", "Completed with Errors", "Error", "Cancelled"}
+FAILURE_STATUSES = {"Failed", "Completed with Errors", "Error", "Cancelled", "failed"}
 
 
 def poll_until_done(
@@ -86,5 +87,5 @@ def poll_until_done(
         else:
             return _do_poll()
     except KeyboardInterrupt:
-        console.print("\n[yellow]Polling cancelled by user.[/yellow]")
+        console.print("\n[yellow]Exited polling view — job is still running on the server.[/yellow]")
         return last_result or {"status": "Cancelled", "_poll_interrupted": True}
