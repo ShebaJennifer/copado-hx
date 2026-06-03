@@ -66,9 +66,8 @@ _COMMON_TYPES = [
 
 
 def _interactive_metadata_picker() -> list[dict]:
-    """Interactive component selector — query org metadata and let user pick."""
-    from rich.table import Table
-    from rich import box
+    """Interactive component selector — ask user for type and name directly."""
+    from rich.prompt import Prompt
 
     selected: list[dict] = []
 
@@ -76,138 +75,29 @@ def _interactive_metadata_picker() -> list[dict]:
     console.print()
 
     while True:
-        # ── Step 1: pick metadata type ──
-        table = Table(title="Metadata Types", box=box.SIMPLE, show_lines=False)
-        table.add_column("#", style="bold cyan", width=4)
-        table.add_column("Type")
-        for i, t in enumerate(_COMMON_TYPES, 1):
-            table.add_row(str(i), t)
-        console.print(table)
-        console.print("[dim]Or type a custom metadata type name.[/dim]")
-
-        type_input = Prompt.ask(
-            "[bold]Select type[/bold]",
+        meta_type = Prompt.ask(
+            "[bold]Metadata type[/bold] (e.g., ApexClass, ApexTrigger, Flow, LightningComponentBundle)",
             default="",
         ).strip()
-        if not type_input:
+        if not meta_type:
             break
 
-        # Resolve to type name
-        try:
-            idx = int(type_input) - 1
-            if 0 <= idx < len(_COMMON_TYPES):
-                meta_type = _COMMON_TYPES[idx]
-            else:
-                print_error(f"Invalid selection: {type_input}")
-                continue
-        except ValueError:
-            meta_type = type_input  # custom type name
+        comp_name = Prompt.ask(
+            f"[bold]Component name[/bold] ({meta_type})",
+            default="",
+        ).strip()
+        if not comp_name:
+            break
 
-        # ── Step 2: query org for components of this type ──
-        console.print(f"[dim]Querying org for {meta_type} components...[/dim]")
-        components = cicd.list_org_metadata(meta_type)
+        selected.append({"a": "Add", "t": meta_type, "n": comp_name})
+        console.print(f"  [green]✓[/green] Added: {meta_type}/{comp_name}")
 
-        if components:
-            comp_table = Table(title=f"{meta_type} ({len(components)} found)", box=box.SIMPLE)
-            comp_table.add_column("#", style="bold cyan", width=4)
-            comp_table.add_column("Name")
-            for i, name in enumerate(components, 1):
-                comp_table.add_row(str(i), name)
-            console.print(comp_table)
-
-            pick = Prompt.ask(
-                "[bold]Select components (comma-separated, e.g. 1,3,5)[/bold]",
-                default="",
-            ).strip()
-            if pick:
-                for p in pick.split(","):
-                    p = p.strip()
-                    try:
-                        ci = int(p) - 1
-                        if 0 <= ci < len(components):
-                            entry = {"a": "Add", "t": meta_type, "n": components[ci]}
-                            if entry not in selected:
-                                selected.append(entry)
-                                console.print(f"  [green]✓[/green] {meta_type}/{components[ci]}")
-                    except ValueError:
-                        pass
-        else:
-            # Tooling API didn't return results — let user type names manually
-            console.print(f"[yellow]Could not query {meta_type} from org. Enter names manually.[/yellow]")
-            names_input = Prompt.ask(
-                f"[bold]Component names (comma-separated)[/bold]",
-                default="",
-            ).strip()
-            if names_input:
-                for n in names_input.split(","):
-                    n = n.strip()
-                    if n:
-                        entry = {"a": "Add", "t": meta_type, "n": n}
-                        if entry not in selected:
-                            selected.append(entry)
-                            console.print(f"  [green]✓[/green] {meta_type}/{n}")
-
-        console.print()
-        if selected:
-            # Show current selections
-            console.print(f"[bold]Selected ({len(selected)}):[/bold]")
-            for i, s in enumerate(selected, 1):
-                console.print(f"  {i}. {s['t']}/{s['n']}")
-
-            # Allow removal
-            remove_input = Prompt.ask(
-                "[bold]Remove any? (enter #, or press Enter to skip)[/bold]",
-                default="",
-            ).strip()
-            if remove_input:
-                for r in remove_input.split(","):
-                    r = r.strip()
-                    try:
-                        ri = int(r) - 1
-                        if 0 <= ri < len(selected):
-                            removed = selected.pop(ri)
-                            console.print(f"  [red]✗[/red] Removed {removed['t']}/{removed['n']}")
-                    except ValueError:
-                        pass
-
-            if not Confirm.ask("[bold]Add more components?[/bold]", default=False):
-                break
-        else:
-            console.print("[dim]No components selected yet. Try again.[/dim]")
-
-    # ── Summary ──
-    while selected:
-        console.print()
-        summary = Table(title="Components to Commit", box=box.ROUNDED)
-        summary.add_column("#", style="dim", width=4)
-        summary.add_column("Type", style="cyan")
-        summary.add_column("Name", style="bold")
-        summary.add_column("Action")
-        for i, s in enumerate(selected, 1):
-            summary.add_row(str(i), s["t"], s["n"], s["a"])
-        console.print(summary)
-        console.print()
-
-        action = Prompt.ask(
-            "[bold]Proceed (p), remove entry (r), or cancel (c)?[/bold]",
-            default="p",
+        more = Prompt.ask(
+            "[bold]Add another component?[/bold] (y/n)",
+            default="n",
         ).strip().lower()
-
-        if action == "p":
+        if more not in ("y", "yes"):
             break
-        elif action == "c":
-            return []
-        elif action == "r":
-            rm = Prompt.ask("[bold]Enter # to remove[/bold]", default="").strip()
-            for r in rm.split(","):
-                r = r.strip()
-                try:
-                    ri = int(r) - 1
-                    if 0 <= ri < len(selected):
-                        removed = selected.pop(ri)
-                        console.print(f"  [red]✗[/red] Removed {removed['t']}/{removed['n']}")
-                except ValueError:
-                    pass
 
     return selected
 
@@ -229,7 +119,7 @@ def commit_cmd(
 
     # Load changes from file if provided
     changes = None
-    if changes_file:
+    if changes_file and isinstance(changes_file, str):
         import json
         try:
             with open(changes_file) as f:

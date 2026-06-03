@@ -323,6 +323,7 @@ def _deploy_flow():
         default_env = state.get("last_env", "") or "INT-SFP"
 
         opts = [
+            {"label": "Set Working Story", "cmd": "__set_story__"},
             {"label": "Commit changes", "cmd": "__commit__"},
             {"label": "Validate changes", "cmd": "__validate__"},
             {"label": "Merge and Deploy", "cmd": "__merge_deploy__"},
@@ -336,7 +337,15 @@ def _deploy_flow():
 
         selected = opts[choice - 1]
 
-        if selected["cmd"] == "__commit__":
+        if selected["cmd"] == "__set_story__":
+            sid = Prompt.ask("[bold]Story ID[/bold]")
+            if sid:
+                from copado_hx.utils.config import update_settings
+                update_settings(current_story_id=sid)
+                print_success(f"Working context set to [bold]{sid}[/bold]")
+                record_action("story_set", last_story=sid)
+
+        elif selected["cmd"] == "__commit__":
             sid = Prompt.ask("[bold]Story ID[/bold]", default=default_story) if default_story else Prompt.ask("[bold]Story ID[/bold]")
             msg = Prompt.ask("[bold]Commit message[/bold]", default=f"update: {sid}")
             _run_selected(f'copado-hx commit --us {sid} -m "{msg}"')
