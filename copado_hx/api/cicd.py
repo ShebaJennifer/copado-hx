@@ -761,9 +761,21 @@ def commit(message: str, story_id: str, changes: Optional[list[dict]] = None) ->
             "  → Select components in the Copado UI first, or provide --changes <file.json>."
         )
 
+    # Enrich changes with module/category fields for Copado v26.25 + SalesforceDx v8.19
+    enriched_changes = [
+        {
+            "a": c.get("a", "Add"),
+            "n": c.get("n"),
+            "t": c.get("t"),
+            "m": "force-app/main/default",
+            "c": "SFDX",
+        }
+        for c in changes
+    ]
+
     result = _post_action("Commit", {
         "userStoryId": sf_id,
-        "changes": changes,
+        "changes": enriched_changes,
         "message": message,
     })
 

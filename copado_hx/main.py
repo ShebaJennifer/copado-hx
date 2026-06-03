@@ -89,6 +89,16 @@ def commit_shortcut(
     commit_cmd(message=message, us=us, changes_file=changes_file, watch=watch, json_output=json_output)
 
 
+@app.command("validate")
+def validate_shortcut(
+    us: str = typer.Option(None, "--us", help="User story ID"),
+    json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
+):
+    """Validate changes (dry-run — no merge, no deploy)."""
+    from copado_hx.commands.pipeline import promote_cmd
+    promote_cmd(env="", us=us, validate=True, watch=True, json_output=json_output)
+
+
 @app.command("promote")
 def promote_shortcut(
     env: str = typer.Option("", "--env", "-e", help="Target environment"),
@@ -199,7 +209,7 @@ def _print_help() -> None:
     t1.add_row("story set --id <ID>",              "Set working story context")
     t1.add_row("story create --title \"...\"",       "Create a new user story")
     t1.add_row("commit -m \"msg\" [--us <ID>]",     "Commit metadata (auto-detect or --changes)")
-    t1.add_row("promote --validate [--us <ID>]",    "Validate changes (dry-run)")
+    t1.add_row("validate [--us <ID>]",              "Validate changes (dry-run)")
     t1.add_row("promote --env <ENV> [--us <ID>]",  "Promote (Git merge only)")
     t1.add_row("deploy --promotion <ID>",           "Deploy a promoted user story")
     t1.add_row("merge-deploy --env <ENV>",          "Promote + deploy in one step")
@@ -351,9 +361,9 @@ def demo():
     time.sleep(STEP_DELAY)
 
     # Step 7 — Validate in UAT
-    _step(7, "Validate in UAT", "copado-hx promote --us US-0000024 --env UAT-SFP --validate")
+    _step(7, "Validate in UAT", "copado-hx validate --us US-0000024")
     try:
-        promote_shortcut(env="UAT-SFP", us="US-0000024", validate=True, watch=False, json_output=False)
+        validate_shortcut(us="US-0000024", json_output=False)
     except SystemExit:
         pass
     time.sleep(STEP_DELAY)

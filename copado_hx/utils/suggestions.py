@@ -39,7 +39,7 @@ def recommend(override_action: Optional[str] = None) -> list[dict]:
     has_cicd = get_token("copado_actions_key") is not None
     has_crt = get_token("crt") is not None
     has_ai = get_token("ai") is not None
-    story = settings.current_story_id
+    story = state.get("last_story") or settings.current_story_id
     last = override_action or state.get("last_action", "")
     last_env = state.get("last_env", "")
     last_job = state.get("last_job_id", "")
@@ -68,8 +68,8 @@ def recommend(override_action: Optional[str] = None) -> list[dict]:
 
     if last == "commit":
         if story:
-            suggestions.append({"cmd": f"copado-hx promote --us {story} --env INT-SFP", "why": "Promote to next environment"})
-            suggestions.append({"cmd": f"copado-hx promote --us {story} --env INT-SFP --validate", "why": "Validate before promoting"})
+            suggestions.append({"cmd": f"copado-hx validate --us {story}", "why": "Validate changes"})
+            suggestions.append({"cmd": f"copado-hx merge-deploy --us {story} --env INT-SFP", "why": "Merge and deploy to integration"})
         suggestions.append({"cmd": "copado-hx story list", "why": "Check other stories"})
         if has_ai:
             suggestions.append({"cmd": "copado-hx ai ask --agent build \"Review my commit\"", "why": "AI code review"})

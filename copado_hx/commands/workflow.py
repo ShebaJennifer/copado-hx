@@ -864,6 +864,11 @@ def _execute_cmd(cmd: str) -> None:
             msg = _extract_opt(parts, "-m") or _extract_opt(parts, "--message") or "commit"
             commit_cmd(message=msg, us=us, json_output=False)
 
+        elif parts[0] == "validate":
+            from copado_hx.commands.pipeline import promote_cmd
+            us = _extract_opt(parts, "--us")
+            promote_cmd(env="", us=us, validate=True, watch=True, json_output=False)
+
         elif parts[0] == "promote":
             from copado_hx.commands.pipeline import promote_cmd
             us = _extract_opt(parts, "--us")
